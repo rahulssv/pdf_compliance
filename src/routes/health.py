@@ -16,4 +16,3 @@ def health_check():
         "version": "1.0.0"
     }), 200
 
-# Made with Bob

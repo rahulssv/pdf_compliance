@@ -40,4 +40,3 @@ class Config:
 # Validate configuration on import
 Config.validate()
 
-# Made with Bob

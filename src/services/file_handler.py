@@ -113,4 +113,3 @@ class FileHandler:
         except Exception as e:
             print(f"Warning: Failed to cleanup temp files: {e}")
 
-# Made with Bob

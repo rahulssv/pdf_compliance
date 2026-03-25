@@ -83,4 +83,3 @@ def dashboard():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Made with Bob

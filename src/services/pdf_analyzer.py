@@ -247,4 +247,3 @@ class PDFAnalyzer:
         else:
             return 'non-compliant'
 
-# Made with Bob
