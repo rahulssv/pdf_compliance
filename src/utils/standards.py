@@ -170,4 +170,3 @@ def map_issue_to_standard(issue_type: str):
         'category': 'WCAG'
     }
 
-# Made with Bob

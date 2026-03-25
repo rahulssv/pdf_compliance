@@ -155,4 +155,3 @@ Do not include the standard reference in the description."""
         # Generic fallback
         return f'Review the document according to {standard} requirements. Use PDF accessibility tools to identify and fix the specific issue. Consider consulting WCAG 2.1 guidelines and PDF/UA standards for detailed remediation steps.'
 
-# Made with Bob

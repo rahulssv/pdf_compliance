@@ -259,4 +259,3 @@ class ComplianceService:
         else:
             return standard
 
-# Made with Bob
