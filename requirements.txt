@@ -1,0 +1,22 @@
+# Web Framework
+flask==3.0.0
+flask-cors==4.0.0
+
+# PDF Processing
+pypdf==3.17.4
+pdfplumber==0.10.3
+
+# LLM Integration
+google-generativeai==0.3.2
+
+# HTTP Requests
+requests==2.31.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Production Server
+gunicorn==21.2.0
+
+# Utilities
+urllib3==2.1.0
