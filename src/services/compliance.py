@@ -1,9 +1,13 @@
-"""Main compliance service orchestrating all operations"""
+"""Main compliance service orchestrating all operations with enhanced error handling"""
+import logging
 from typing import List, Dict, Any
 from collections import Counter
 from src.services.file_handler import FileHandler
 from src.services.pdf_analyzer import PDFAnalyzer
 from src.services.gemini_service import GeminiService
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class ComplianceService:
@@ -13,6 +17,7 @@ class ComplianceService:
         self.file_handler = FileHandler()
         self.pdf_analyzer = PDFAnalyzer()
         self.gemini_service = GeminiService()
+        logger.info(f"🚀 ComplianceService initialized (Gemini: {'✅' if self.gemini_service.is_initialized else '❌'})")
     
     def scan_files(self, file_urls: List[str]) -> Dict[str, Any]:
         """
@@ -24,27 +29,44 @@ class ComplianceService:
         Returns:
             Scan results with files and worst file information
         """
+        logger.info(f"📊 Starting scan of {len(file_urls)} file(s)")
         files_results = []
         
-        for file_url in file_urls:
+        for idx, file_url in enumerate(file_urls, 1):
             try:
+                logger.info(f"[{idx}/{len(file_urls)}] Processing: {file_url}")
+                
                 # Get the file
                 file_path, filename = self.file_handler.get_file_path(file_url)
+                logger.info(f"  📄 File loaded: {filename}")
                 
                 # Analyze the PDF
                 analysis = self.pdf_analyzer.analyze_pdf(file_path, filename)
                 
                 files_results.append(analysis)
                 
-            except Exception as e:
-                print(f"Error processing {file_url}: {str(e)}")
-                # Add error result
+            except FileNotFoundError as e:
+                logger.error(f"  ❌ File not found: {file_url}")
+                # Add error result with appropriate status
                 files_results.append({
-                    'fileName': file_url.split('/')[-1],
+                    'fileName': self._extract_filename(file_url),
                     'nonCompliancePercent': 100,
                     'complianceStatus': 'non-compliant',
                     'issues': [{
-                        'description': f'Failed to process file: {str(e)}',
+                        'description': f'File could not be accessed or does not exist.',
+                        'standard': 'N/A',
+                        'category': 'Error'
+                    }]
+                })
+            except Exception as e:
+                logger.error(f"  ❌ Error processing {file_url}: {str(e)}")
+                # Add error result
+                files_results.append({
+                    'fileName': self._extract_filename(file_url),
+                    'nonCompliancePercent': 100,
+                    'complianceStatus': 'non-compliant',
+                    'issues': [{
+                        'description': f'Failed to process file: {str(e)[:100]}',
                         'standard': 'N/A',
                         'category': 'Error'
                     }]
@@ -52,6 +74,8 @@ class ComplianceService:
         
         # Find worst file
         worst_file = self._find_worst_file(files_results)
+        
+        logger.info(f"✅ Scan complete. Worst file: {worst_file['fileName']} ({worst_file['nonCompliancePercent']}%)")
         
         return {
             'files': files_results,
@@ -68,19 +92,24 @@ class ComplianceService:
         Returns:
             Remediation results with fix suggestions
         """
+        logger.info(f"🔧 Starting remediation for {len(file_urls)} file(s)")
         files_results = []
         
-        for file_url in file_urls:
+        for idx, file_url in enumerate(file_urls, 1):
             try:
+                logger.info(f"[{idx}/{len(file_urls)}] Processing: {file_url}")
+                
                 # Get the file
                 file_path, filename = self.file_handler.get_file_path(file_url)
                 
                 # Analyze the PDF
                 analysis = self.pdf_analyzer.analyze_pdf(file_path, filename)
                 
-                # Add remediation guidance to each issue
+                # Add remediation guidance to each issue using Gemini
                 issues_with_fixes = []
-                for issue in analysis['issues']:
+                for issue_idx, issue in enumerate(analysis['issues'], 1):
+                    logger.info(f"  🤖 Generating fix {issue_idx}/{len(analysis['issues'])}")
+                    
                     fix = self.gemini_service.generate_remediation(
                         issue['description'],
                         issue['standard']
@@ -97,17 +126,21 @@ class ComplianceService:
                     'issues': issues_with_fixes
                 })
                 
+                logger.info(f"  ✅ Generated {len(issues_with_fixes)} remediation(s)")
+                
             except Exception as e:
-                print(f"Error processing {file_url}: {str(e)}")
+                logger.error(f"  ❌ Error processing {file_url}: {str(e)}")
                 # Add error result
                 files_results.append({
-                    'fileName': file_url.split('/')[-1],
+                    'fileName': self._extract_filename(file_url),
                     'issues': [{
-                        'description': f'Failed to process file: {str(e)}',
+                        'description': f'Failed to process file: {str(e)[:100]}',
                         'standard': 'N/A',
-                        'fix': 'Please check the file path and ensure the file is accessible.'
+                        'fix': 'Please check the file path and ensure the file is accessible and not corrupted.'
                     }]
                 })
+        
+        logger.info(f"✅ Remediation complete for {len(files_results)} file(s)")
         
         return {
             'files': files_results
@@ -123,6 +156,8 @@ class ComplianceService:
         Returns:
             Dashboard with aggregated compliance metrics
         """
+        logger.info(f"📈 Generating dashboard for {len(file_urls)} file(s)")
+        
         # First, scan all files
         scan_results = self.scan_files(file_urls)
         files = scan_results['files']
@@ -131,9 +166,11 @@ class ComplianceService:
         total_scanned = len(files)
         total_issues = sum(len(f['issues']) for f in files)
         
-        # For simplicity, assume all issues are fixable
-        # In a real implementation, you might categorize some as non-fixable
-        total_fixable = total_issues
+        # Calculate fixable issues (exclude error category)
+        total_fixable = sum(
+            len([i for i in f['issues'] if i.get('category') != 'Error']) 
+            for f in files
+        )
         
         # Compliance breakdown
         compliance_breakdown = self._calculate_compliance_breakdown(files)
@@ -144,7 +181,7 @@ class ComplianceService:
         # Standard violation frequency
         standard_violation_frequency = self._calculate_standard_violations(files)
         
-        return {
+        dashboard = {
             'totalScanned': total_scanned,
             'totalIssues': total_issues,
             'totalFixable': total_fixable,
@@ -152,6 +189,17 @@ class ComplianceService:
             'topIssueTypes': top_issue_types,
             'standardViolationFrequency': standard_violation_frequency
         }
+        
+        logger.info(f"✅ Dashboard generated: {total_scanned} scanned, {total_issues} issues, {total_fixable} fixable")
+        
+        return dashboard
+    
+    def _extract_filename(self, file_url: str) -> str:
+        """Extract filename from URL or path"""
+        # Handle Windows and Unix paths
+        if '\\' in file_url:
+            return file_url.split('\\')[-1]
+        return file_url.split('/')[-1]
     
     def _find_worst_file(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Find the file with highest non-compliance percentage"""
@@ -165,9 +213,10 @@ class ComplianceService:
         }
     
     def _calculate_compliance_breakdown(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Calculate compliance status breakdown"""
+        """Calculate compliance status breakdown ensuring all files are counted"""
         status_counts = Counter(f['complianceStatus'] for f in files)
         
+        # Build breakdown in consistent order
         breakdown = []
         for status in ['compliant', 'partially-compliant', 'non-compliant']:
             count = status_counts.get(status, 0)
@@ -177,14 +226,22 @@ class ComplianceService:
                     'count': count
                 })
         
+        # Verify arithmetic: sum should equal total files
+        total_in_breakdown = sum(item['count'] for item in breakdown)
+        if total_in_breakdown != len(files):
+            logger.warning(f"⚠️ Breakdown sum ({total_in_breakdown}) != total files ({len(files)})")
+        
         return breakdown
     
     def _calculate_top_issue_types(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Calculate top issue types across all files"""
+        """Calculate top issue types across all files (excluding errors)"""
         issue_types = []
         
         for file in files:
             for issue in file['issues']:
+                # Skip error category issues
+                if issue.get('category') == 'Error':
+                    continue
                 # Extract issue type from description
                 issue_type = self._extract_issue_type(issue['description'])
                 issue_types.append(issue_type)
@@ -194,19 +251,25 @@ class ComplianceService:
         
         # Count and sort
         type_counts = Counter(issue_types)
-        top_types = type_counts.most_common(5)  # Top 5
+        top_types = type_counts.most_common(10)  # Top 10
         
-        return [
+        result = [
             {'type': issue_type, 'count': count}
             for issue_type, count in top_types
         ]
+        
+        logger.info(f"  📊 Top issue types: {len(result)} unique types")
+        return result
     
     def _calculate_standard_violations(self, files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Calculate standard violation frequency"""
+        """Calculate standard violation frequency (excluding errors)"""
         standards = []
         
         for file in files:
             for issue in file['issues']:
+                # Skip error category issues
+                if issue.get('category') == 'Error' or issue.get('standard') == 'N/A':
+                    continue
                 # Extract standard family (e.g., "WCAG 2.1" from "WCAG 2.1 SC 1.1.1")
                 standard = self._extract_standard_family(issue['standard'])
                 standards.append(standard)
@@ -216,12 +279,15 @@ class ComplianceService:
         
         # Count and sort
         standard_counts = Counter(standards)
-        top_standards = standard_counts.most_common(5)  # Top 5
+        top_standards = standard_counts.most_common(10)  # Top 10
         
-        return [
+        result = [
             {'standard': standard, 'count': count}
             for standard, count in top_standards
         ]
+        
+        logger.info(f"  📊 Standard violations: {len(result)} unique standards")
+        return result
     
     def _extract_issue_type(self, description: str) -> str:
         """Extract a readable issue type from description"""

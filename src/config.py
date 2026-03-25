@@ -25,9 +25,10 @@ class Config:
     SUPPORTED_LOCATOR_SCHEMES = ['http', 'https', 'file']
     
     # Gemini Model Configuration
-    GEMINI_MODEL = 'gemini-3.1-pro-preview'
+    GEMINI_MODEL = 'gemini-2.5-flash'
     GEMINI_TEMPERATURE = 0.7
-    GEMINI_MAX_TOKENS = 1024
+    GEMINI_MAX_TOKENS = 2048
+    GEMINI_TIMEOUT = 30
     
     @classmethod
     def validate(cls):
