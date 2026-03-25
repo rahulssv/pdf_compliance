@@ -36,6 +36,9 @@ class PDFAnalyzer:
             return cached
         
         issues = []
+        has_tag_tree = False
+        figures_with_alt = 0
+        figures_without_alt = 0
         
         try:
             logger.info(f"🔍 Analyzing {filename}...")
@@ -45,7 +48,8 @@ class PDFAnalyzer:
                 pdf_reader = pypdf.PdfReader(f)
                 
                 # Check for tag tree (PDF/UA requirement)
-                if not self._has_tag_tree(pdf_reader):
+                has_tag_tree = self._has_tag_tree(pdf_reader)
+                if not has_tag_tree:
                     issues.append(self._create_issue(
                         'no_tag_tree',
                         'Document does not contain a tag tree, so screen readers cannot interpret structural semantics.'
@@ -53,6 +57,9 @@ class PDFAnalyzer:
                     logger.info("  ❌ No tag tree found")
                 else:
                     logger.info("  ✅ Tag tree present")
+                    # Check for Figure elements with/without alt text
+                    figures_with_alt, figures_without_alt = self._check_figure_alt_text(pdf_reader)
+                    logger.info(f"  📊 Figures with alt: {figures_with_alt}, without alt: {figures_without_alt}")
                 
                 # Check for document language
                 if not self._has_language(pdf_reader):
@@ -77,14 +84,26 @@ class PDFAnalyzer:
             
             # Analyze with pdfplumber for content
             with pdfplumber.open(file_path) as pdf:
-                # Check for images without alt text
+                # Check for images - but only flag if structure tree shows missing alt text
                 has_images, image_count = self._check_images(pdf)
-                if has_images:
+                
+                # Only report missing alt text if we found figures without alt in structure tree,
+                # or if there's no tag tree but images exist
+                if figures_without_alt > 0:
+                    issues.append(self._create_issue(
+                        'missing_alt_text',
+                        f'Figure elements are present but missing alternative text.'
+                    ))
+                    logger.info(f"  ❌ {figures_without_alt} figure(s) missing alt text")
+                elif has_images and not has_tag_tree:
+                    # Images exist but no tag tree - they can't have proper alt text
                     issues.append(self._create_issue(
                         'missing_alt_text',
                         f'Document contains {image_count} image(s) that may be missing alternative text.'
                     ))
-                    logger.info(f"  ⚠️ {image_count} images detected")
+                    logger.info(f"  ⚠️ {image_count} images detected without tag tree")
+                elif has_images:
+                    logger.info(f"  ✅ {image_count} image(s) with proper alt text")
                 
                 # Check for form fields
                 has_forms, form_count = self._check_form_fields(pdf)
@@ -163,6 +182,78 @@ class PDFAnalyzer:
         except Exception as e:
             logger.warning(f"Error checking tag tree: {e}")
             return False
+    
+    def _check_figure_alt_text(self, pdf_reader: pypdf.PdfReader) -> tuple[int, int]:
+        """
+        Check Figure elements in structure tree for alt text
+        
+        Returns:
+            Tuple of (figures_with_alt, figures_without_alt)
+        """
+        figures_with_alt = 0
+        figures_without_alt = 0
+        
+        try:
+            catalog = pdf_reader.trailer.get('/Root')
+            if not catalog:
+                return 0, 0
+            
+            if isinstance(catalog, pypdf.generic.IndirectObject):
+                catalog = catalog.get_object()
+            
+            if '/StructTreeRoot' not in catalog:
+                return 0, 0
+            
+            struct_tree = catalog['/StructTreeRoot']
+            if isinstance(struct_tree, pypdf.generic.IndirectObject):
+                struct_tree = struct_tree.get_object()
+            
+            k = struct_tree.get('/K')
+            if not k:
+                return 0, 0
+            
+            def find_figures(obj, depth=0):
+                nonlocal figures_with_alt, figures_without_alt
+                
+                if depth > 15:  # Prevent infinite recursion
+                    return
+                
+                if isinstance(obj, pypdf.generic.IndirectObject):
+                    try:
+                        obj = obj.get_object()
+                    except Exception:
+                        return
+                
+                if isinstance(obj, pypdf.generic.DictionaryObject):
+                    s_type = obj.get('/S')
+                    if s_type:
+                        if isinstance(s_type, pypdf.generic.IndirectObject):
+                            s_type = s_type.get_object()
+                        s_type_str = str(s_type)
+                        
+                        # Check if this is a Figure element
+                        if 'Figure' in s_type_str:
+                            alt = obj.get('/Alt')
+                            if alt and str(alt).strip():
+                                figures_with_alt += 1
+                            else:
+                                figures_without_alt += 1
+                    
+                    # Check children
+                    k_child = obj.get('/K')
+                    if k_child:
+                        find_figures(k_child, depth + 1)
+                
+                elif isinstance(obj, pypdf.generic.ArrayObject):
+                    for item in obj:
+                        find_figures(item, depth + 1)
+            
+            find_figures(k)
+            
+        except Exception as e:
+            logger.warning(f"Error checking figure alt text: {e}")
+        
+        return figures_with_alt, figures_without_alt
     
     def _has_language(self, pdf_reader: pypdf.PdfReader) -> bool:
         """Check if PDF has language declaration"""
