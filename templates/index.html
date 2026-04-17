@@ -88,6 +88,7 @@
             <button data-format="csv" class="secondary exportBtn">Export CSV</button>
             <button data-format="html" class="secondary exportBtn">Export HTML</button>
             <button data-format="markdown" class="secondary exportBtn">Export Markdown</button>
+            <button id="downloadRemediatedBtn" class="secondary hidden">Download Auto-remediated PDF</button>
           </div>
         </div>
         <div id="stats" class="stats"></div>
@@ -126,6 +127,7 @@
     const dropzone = document.getElementById('dropzone');
     const selectedFileText = document.getElementById('selectedFile');
     const analyzeBtn = document.getElementById('analyzeBtn');
+    const downloadRemediatedBtn = document.getElementById('downloadRemediatedBtn');
     const resultWrap = document.getElementById('resultWrap');
     const progressWrap = document.getElementById('progressWrap');
     const progressBar = document.getElementById('progressBar');
@@ -160,6 +162,23 @@
       progressBar.style.width = ok ? '100%' : '0%';
       statusText.textContent = message;
       setTimeout(() => progressWrap.classList.add('hidden'), 800);
+    };
+
+    const getDownloadFilename = (contentDisposition, fallback) => {
+      if (!contentDisposition) return fallback;
+      const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+      if (utf8Match && utf8Match[1]) return decodeURIComponent(utf8Match[1]);
+      const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+      return plainMatch && plainMatch[1] ? plainMatch[1] : fallback;
+    };
+
+    const toggleAutoRemediatedDownload = (data) => {
+      const canDownload = Boolean(data.autoRemediatedPdfAvailable && data.remediationResults);
+      if (canDownload) {
+        downloadRemediatedBtn.classList.remove('hidden');
+      } else {
+        downloadRemediatedBtn.classList.add('hidden');
+      }
     };
 
     const renderStats = (data) => {
@@ -248,6 +267,7 @@
       renderIssues(data);
       renderRecommendations(data);
       renderPages(data);
+      toggleAutoRemediatedDownload(data);
       resultWrap.classList.remove('hidden');
     };
 
@@ -280,6 +300,46 @@
         stopProgress(true, 'Analysis complete.');
       } catch (err) {
         stopProgress(false, err.message || 'Analysis failed.');
+      }
+    });
+
+    downloadRemediatedBtn.addEventListener('click', async () => {
+      if (!selectedFile || !lastAnalysis || !lastAnalysis.remediationResults) {
+        alert('Run analysis with Auto-remediate enabled first.');
+        return;
+      }
+
+      const endpoint = lastAnalysis.autoRemediatedPdfDownloadEndpoint || '/api/v2/remediate/auto/download';
+      const form = new FormData();
+      form.append('file', selectedFile);
+      form.append('issues', JSON.stringify(lastAnalysis.issues || []));
+
+      try {
+        downloadRemediatedBtn.disabled = true;
+        const res = await fetch(endpoint, { method: 'POST', body: form });
+        if (!res.ok) {
+          let errorMessage = 'Failed to download auto-remediated PDF.';
+          try {
+            const payload = await res.json();
+            errorMessage = payload.error || errorMessage;
+          } catch (_) {}
+          throw new Error(errorMessage);
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = getDownloadFilename(
+          res.headers.get('Content-Disposition'),
+          `${selectedFile.name.replace(/\.pdf$/i, '')}_auto_remediated.pdf`
+        );
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert(err.message || 'Failed to download auto-remediated PDF.');
+      } finally {
+        downloadRemediatedBtn.disabled = false;
       }
     });
 

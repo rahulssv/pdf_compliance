@@ -72,6 +72,13 @@ def _extract_text(file_buffer: BytesIO) -> str:
     return "\n".join(text_parts).strip()
 
 
+def _auto_remediated_download_name(filename: str) -> str:
+    cleaned = (filename or "document.pdf").split("/")[-1].split("\\")[-1]
+    if cleaned.lower().endswith(".pdf"):
+        cleaned = cleaned[:-4]
+    return f"{cleaned}_auto_remediated.pdf"
+
+
 def _issue_severity(description: str) -> str:
     desc = description.lower()
     if any(term in desc for term in ["scanned", "tag tree", "alternative text", "form field"]):
@@ -285,10 +292,13 @@ def _analyze_document_from_buffer(
             issues=issues,
         )
         result["remediationResults"] = remediation
+        result["autoRemediatedPdfAvailable"] = True
+        result["autoRemediatedPdfDownloadEndpoint"] = "/api/v2/remediate/auto/download"
         summary = remediation.get("summary", {})
         result["autoFixable"] = summary.get("autoFixed", 0)
         result["manualFixesRequired"] = summary.get("manualRequired", 0)
     else:
+        result["autoRemediatedPdfAvailable"] = False
         result["autoFixable"] = sum(1 for issue in issues if issue.get("auto_fixable"))
         result["manualFixesRequired"] = sum(1 for issue in issues if not issue.get("auto_fixable"))
 
@@ -301,6 +311,31 @@ def _analyze_document_from_buffer(
 def analyze_document_internal(file_url: str, options: Dict[str, Any]) -> Dict[str, Any]:
     with ephemeral_handler.ephemeral_file_context(file_url) as (file_buffer, filename):
         return _analyze_document_from_buffer(file_buffer, filename, options)
+
+
+def _run_auto_remediation_with_pdf(
+    file_buffer: BytesIO,
+    filename: str,
+    incoming_issues: Optional[List[Dict[str, Any]]],
+) -> Tuple[BytesIO, Dict[str, Any]]:
+    if incoming_issues is None:
+        analyzed = pdf_analyzer.analyze_pdf_buffer(file_buffer, filename)
+        issues = [_normalize_issue(issue) for issue in analyzed.get("issues", [])]
+    else:
+        issues = [_normalize_issue(issue) for issue in incoming_issues]
+
+    file_buffer.seek(0)
+    remediation_result = remediation_engine.remediate_issues(
+        file_buffer=file_buffer,
+        filename=filename,
+        issues=issues,
+        include_pdf=True,
+    )
+    remediated_pdf_buffer = remediation_result.pop("remediatedPdfBuffer", None)
+    if remediated_pdf_buffer is None:
+        raise RuntimeError("Failed to generate auto-remediated PDF")
+
+    return remediated_pdf_buffer, remediation_result
 
 
 @api_v2_bp.route("/analyze", methods=["POST"])
@@ -640,6 +675,68 @@ def auto_remediate():
             return jsonify({"success": True, **result}), 200
     except Exception as e:
         logger.error(f"Error in auto-remediation: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/remediate/auto/download", methods=["POST"])
+def download_auto_remediated_pdf():
+    try:
+        uploaded_file = request.files.get("file")
+
+        if uploaded_file:
+            if not uploaded_file.filename:
+                return jsonify({"success": False, "error": "file is required"}), 400
+
+            issues_payload = request.form.get("issues")
+            incoming_issues = None
+            if issues_payload:
+                try:
+                    parsed_issues = json.loads(issues_payload)
+                except json.JSONDecodeError:
+                    return jsonify({"success": False, "error": "issues must be valid JSON"}), 400
+                if not isinstance(parsed_issues, list):
+                    return jsonify({"success": False, "error": "issues must be an array"}), 400
+                incoming_issues = parsed_issues
+
+            file_bytes = uploaded_file.read()
+            if not file_bytes:
+                return jsonify({"success": False, "error": "uploaded file is empty"}), 400
+            if len(file_bytes) > ephemeral_handler.max_memory_bytes:
+                return jsonify({"success": False, "error": "uploaded file exceeds in-memory limit"}), 400
+
+            filename = uploaded_file.filename
+            if not filename.lower().endswith(".pdf"):
+                return jsonify({"success": False, "error": "only PDF uploads are supported"}), 400
+
+            remediated_pdf_buffer, _ = _run_auto_remediation_with_pdf(
+                file_buffer=BytesIO(file_bytes),
+                filename=filename,
+                incoming_issues=incoming_issues,
+            )
+        else:
+            data = request.get_json(silent=True)
+            if not data or "fileUrl" not in data:
+                return jsonify({"success": False, "error": "file or fileUrl is required"}), 400
+
+            incoming_issues = data.get("issues")
+            if incoming_issues is not None and not isinstance(incoming_issues, list):
+                return jsonify({"success": False, "error": "issues must be an array"}), 400
+
+            with ephemeral_handler.ephemeral_file_context(data["fileUrl"]) as (file_buffer, filename):
+                remediated_pdf_buffer, _ = _run_auto_remediation_with_pdf(
+                    file_buffer=file_buffer,
+                    filename=filename,
+                    incoming_issues=incoming_issues,
+                )
+
+        return send_file(
+            remediated_pdf_buffer,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=_auto_remediated_download_name(filename),
+        )
+    except Exception as e:
+        logger.error(f"Error generating auto-remediated download: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 

@@ -116,6 +116,34 @@ def test_analyze_upload_endpoint(client, tmp_path):
     assert "pageSummary" in payload
 
 
+def test_analyze_upload_auto_remediate_exposes_download_option(client, tmp_path):
+    pdf_path = _create_test_pdf(tmp_path / "upload-auto-remediate.pdf")
+    pdf_bytes = pdf_path.read_bytes()
+
+    response = client.post(
+        "/api/v2/analyze/upload",
+        data={
+            "file": (io.BytesIO(pdf_bytes), "upload-auto-remediate.pdf"),
+            "options": json.dumps(
+                {
+                    "pageLevel": False,
+                    "detectPII": False,
+                    "validateAI": False,
+                    "autoRemediate": True,
+                }
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert payload["autoRemediatedPdfAvailable"] is True
+    assert payload["autoRemediatedPdfDownloadEndpoint"] == "/api/v2/remediate/auto/download"
+    assert "remediationResults" in payload
+
+
 def test_analyze_upload_defaults_to_non_strict_gemini(client, tmp_path, monkeypatch):
     pdf_path = _create_test_pdf(tmp_path / "upload-default-nonstrict.pdf")
     pdf_bytes = pdf_path.read_bytes()
@@ -196,6 +224,32 @@ def test_analyze_upload_honors_strict_gemini_option(client, tmp_path, monkeypatc
     payload = response.get_json()
     assert payload["success"] is False
     assert "Gemini unavailable" in payload["error"]
+
+
+def test_download_auto_remediated_pdf_from_upload(client, tmp_path):
+    pdf_path = _create_test_pdf(tmp_path / "download-remediate.pdf")
+    pdf_bytes = pdf_path.read_bytes()
+
+    response = client.post(
+        "/api/v2/remediate/auto/download",
+        data={
+            "file": (io.BytesIO(pdf_bytes), "download-remediate.pdf"),
+            "issues": json.dumps(
+                [
+                    {
+                        "description": "Document language is not declared.",
+                        "standard": "WCAG 2.1 SC 3.1.1",
+                    }
+                ]
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    assert response.data.startswith(b"%PDF")
+    assert "attachment" in response.headers.get("Content-Disposition", "")
 
 
 def test_compatibility_page_endpoints(client, tmp_path):

@@ -180,7 +180,8 @@ class AutoRemediationEngine:
         self,
         file_buffer: BytesIO,
         filename: str,
-        issues: List[Dict[str, Any]]
+        issues: List[Dict[str, Any]],
+        include_pdf: bool = False,
     ) -> Dict[str, Any]:
         """
         Remediate issues using two-tier approach
@@ -200,6 +201,9 @@ class AutoRemediationEngine:
         """
         logger.info(f"🔧 Starting remediation for {filename} ({len(issues)} issues)")
         
+        file_buffer.seek(0)
+        working_buffer = BytesIO(file_buffer.read())
+
         auto_fixed = []
         user_actions = []
         
@@ -209,10 +213,12 @@ class AutoRemediationEngine:
             
             if issue_type in self.auto_fixable_issues:
                 # Attempt automated fix
-                action = self._apply_automated_fix(
-                    file_buffer, issue_type, issue, filename
+                action, updated_buffer = self._apply_automated_fix(
+                    working_buffer, issue_type, issue, filename
                 )
                 auto_fixed.append(action)
+                if action.status == 'completed' and updated_buffer is not None:
+                    working_buffer = updated_buffer
             else:
                 # Generate user action guidance
                 user_action = self._generate_user_action(issue_type, issue)
@@ -235,12 +241,18 @@ class AutoRemediationEngine:
             f"{summary['manualRequired']} manual actions required"
         )
         
-        return {
+        result = {
             'fileName': filename,
             'autoFixed': [asdict(a) for a in auto_fixed],
             'userActions': [asdict(a) for a in user_actions],
             'summary': summary
         }
+
+        if include_pdf:
+            working_buffer.seek(0)
+            result['remediatedPdfBuffer'] = working_buffer
+
+        return result
     
     def _classify_issue(self, issue: Dict[str, Any]) -> str:
         """Classify issue type for remediation"""
@@ -273,7 +285,7 @@ class AutoRemediationEngine:
         issue_type: str,
         issue: Dict[str, Any],
         filename: str
-    ) -> RemediationAction:
+    ) -> Tuple[RemediationAction, Optional[BytesIO]]:
         """Apply automated fix to PDF"""
         fix_config = self.auto_fixable_issues[issue_type]
         
@@ -282,7 +294,11 @@ class AutoRemediationEngine:
             fix_function = getattr(self, fix_config['fix_function'])
             
             # Apply fix
-            success, details = fix_function(file_buffer, filename, fix_config['default_value'])
+            success, details, updated_buffer = fix_function(
+                file_buffer,
+                filename,
+                fix_config['default_value'],
+            )
             
             action = RemediationAction(
                 issue_type=issue_type,
@@ -301,7 +317,7 @@ class AutoRemediationEngine:
             else:
                 logger.warning(f"  ⚠️ Auto-fix failed: {issue_type}")
             
-            return action
+            return action, updated_buffer if success else None
             
         except Exception as e:
             logger.error(f"  ❌ Error applying fix for {issue_type}: {e}")
@@ -312,8 +328,35 @@ class AutoRemediationEngine:
                 status='failed',
                 timestamp=datetime.utcnow().isoformat(),
                 details={'error': str(e)}
-            )
+            ), None
     
+    def _build_writer_from_buffer(self, file_buffer: BytesIO) -> pypdf.PdfWriter:
+        """Create a PDF writer preloaded with pages and existing metadata."""
+        file_buffer.seek(0)
+        pdf_reader = pypdf.PdfReader(file_buffer)
+        pdf_writer = pypdf.PdfWriter()
+
+        for page in pdf_reader.pages:
+            pdf_writer.add_page(page)
+
+        if pdf_reader.metadata:
+            metadata = {
+                str(key): str(value)
+                for key, value in pdf_reader.metadata.items()
+                if value is not None
+            }
+            if metadata:
+                pdf_writer.add_metadata(metadata)
+
+        return pdf_writer
+
+    def _write_writer_to_buffer(self, pdf_writer: pypdf.PdfWriter) -> BytesIO:
+        """Serialize a PDF writer to a ready-to-read memory buffer."""
+        output_buffer = BytesIO()
+        pdf_writer.write(output_buffer)
+        output_buffer.seek(0)
+        return output_buffer
+
     def _generate_user_action(
         self,
         issue_type: str,
@@ -345,50 +388,36 @@ class AutoRemediationEngine:
         file_buffer: BytesIO,
         filename: str,
         language: str
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> Tuple[bool, Dict[str, Any], Optional[BytesIO]]:
         """Add document language metadata"""
         try:
-            file_buffer.seek(0)
-            pdf_reader = pypdf.PdfReader(file_buffer)
-            pdf_writer = pypdf.PdfWriter()
-            
-            # Copy all pages
-            for page in pdf_reader.pages:
-                pdf_writer.add_page(page)
+            pdf_writer = self._build_writer_from_buffer(file_buffer)
             
             # Add language to catalog
             if pdf_writer._root_object:
                 pdf_writer._root_object[pypdf.generic.NameObject('/Lang')] = \
                     pypdf.generic.TextStringObject(language)
             
-            # Write to buffer (in production, would return modified buffer)
-            output_buffer = BytesIO()
-            pdf_writer.write(output_buffer)
+            output_buffer = self._write_writer_to_buffer(pdf_writer)
             
             return True, {
                 'language_set': language,
                 'method': 'catalog_metadata'
-            }
+            }, output_buffer
             
         except Exception as e:
             logger.error(f"Error adding language: {e}")
-            return False, {'error': str(e)}
+            return False, {'error': str(e)}, None
     
     def add_document_title(
         self,
         file_buffer: BytesIO,
         filename: str,
         title_source: str
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> Tuple[bool, Dict[str, Any], Optional[BytesIO]]:
         """Add document title from filename"""
         try:
-            file_buffer.seek(0)
-            pdf_reader = pypdf.PdfReader(file_buffer)
-            pdf_writer = pypdf.PdfWriter()
-            
-            # Copy all pages
-            for page in pdf_reader.pages:
-                pdf_writer.add_page(page)
+            pdf_writer = self._build_writer_from_buffer(file_buffer)
             
             # Generate title from filename
             if title_source == 'from_filename':
@@ -403,34 +432,26 @@ class AutoRemediationEngine:
                 '/Creator': 'Auto Remediation'
             })
             
-            # Write to buffer
-            output_buffer = BytesIO()
-            pdf_writer.write(output_buffer)
+            output_buffer = self._write_writer_to_buffer(pdf_writer)
             
             return True, {
                 'title_set': title,
                 'source': title_source
-            }
+            }, output_buffer
             
         except Exception as e:
             logger.error(f"Error adding title: {e}")
-            return False, {'error': str(e)}
+            return False, {'error': str(e)}, None
     
     def add_basic_metadata(
         self,
         file_buffer: BytesIO,
         filename: str,
         metadata_type: str
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> Tuple[bool, Dict[str, Any], Optional[BytesIO]]:
         """Add basic document metadata"""
         try:
-            file_buffer.seek(0)
-            pdf_reader = pypdf.PdfReader(file_buffer)
-            pdf_writer = pypdf.PdfWriter()
-            
-            # Copy all pages
-            for page in pdf_reader.pages:
-                pdf_writer.add_page(page)
+            pdf_writer = self._build_writer_from_buffer(file_buffer)
             
             # Add metadata
             metadata = {
@@ -441,34 +462,26 @@ class AutoRemediationEngine:
             
             pdf_writer.add_metadata(metadata)
             
-            # Write to buffer
-            output_buffer = BytesIO()
-            pdf_writer.write(output_buffer)
+            output_buffer = self._write_writer_to_buffer(pdf_writer)
             
             return True, {
                 'metadata_added': list(metadata.keys()),
                 'type': metadata_type
-            }
+            }, output_buffer
             
         except Exception as e:
             logger.error(f"Error adding metadata: {e}")
-            return False, {'error': str(e)}
+            return False, {'error': str(e)}, None
     
     def set_pdf_ua_flag(
         self,
         file_buffer: BytesIO,
         filename: str,
         flag_value: bool
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> Tuple[bool, Dict[str, Any], Optional[BytesIO]]:
         """Set PDF/UA compliance flag"""
         try:
-            file_buffer.seek(0)
-            pdf_reader = pypdf.PdfReader(file_buffer)
-            pdf_writer = pypdf.PdfWriter()
-            
-            # Copy all pages
-            for page in pdf_reader.pages:
-                pdf_writer.add_page(page)
+            pdf_writer = self._build_writer_from_buffer(file_buffer)
             
             # Set PDF/UA flag in catalog
             if pdf_writer._root_object:
@@ -477,18 +490,16 @@ class AutoRemediationEngine:
                     pypdf.generic.BooleanObject(flag_value)
                 pdf_writer._root_object[pypdf.generic.NameObject('/MarkInfo')] = mark_info
             
-            # Write to buffer
-            output_buffer = BytesIO()
-            pdf_writer.write(output_buffer)
+            output_buffer = self._write_writer_to_buffer(pdf_writer)
             
             return True, {
                 'pdf_ua_flag': flag_value,
                 'method': 'mark_info'
-            }
+            }, output_buffer
             
         except Exception as e:
             logger.error(f"Error setting PDF/UA flag: {e}")
-            return False, {'error': str(e)}
+            return False, {'error': str(e)}, None
     
     def get_user_action_template(self, issue_type: str) -> Optional[UserAction]:
         """Get a user-action template for a given issue type."""
