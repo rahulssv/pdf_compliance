@@ -567,4 +567,3 @@ class AutoRemediationEngine:
         self._remediation_history.clear()
         logger.info("🗑️ Remediation history cleared")
 
-# Made with Bob

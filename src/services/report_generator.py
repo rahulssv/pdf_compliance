@@ -1116,4 +1116,3 @@ class ReportGenerator:
             'top_recommendations': report_data.recommendations[:3] if report_data.recommendations else []
         }
 
-# Made with Bob

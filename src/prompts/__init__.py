@@ -15,4 +15,3 @@ from .templates import PromptTemplates
 
 __all__ = ['PromptManager', 'PromptVersion', 'PromptTemplates']
 
-# Made with Bob

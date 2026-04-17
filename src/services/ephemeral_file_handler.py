@@ -242,4 +242,3 @@ class MemoryAwareFileHandler(EphemeralFileHandler):
             'monitoring_enabled': self.enable_monitoring
         }
 
-# Made with Bob

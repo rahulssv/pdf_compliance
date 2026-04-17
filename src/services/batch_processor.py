@@ -523,4 +523,3 @@ if __name__ == '__main__':
     status = processor.get_job_status(job_id)
     print(f"Job status: {status}")
 
-# Made with Bob

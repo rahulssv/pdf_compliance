@@ -224,4 +224,3 @@ def mask_pii(text: str, pattern: PIIPattern) -> str:
     # Default masking
     return '***' + text[-4:] if len(text) > 4 else '***'
 
-# Made with Bob

@@ -497,4 +497,3 @@ Provide thorough validation analysis in JSON format.""",
                 f"Required parameters: {list(template.parameters.keys())}"
             )
 
-# Made with Bob
