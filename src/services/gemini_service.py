@@ -2,8 +2,9 @@
 
 import logging
 import os
+import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import google.generativeai as genai
 
@@ -22,26 +23,139 @@ class GeminiService:
         self.is_initialized = False
         self._cache: Dict[str, Any] = {}
         self._model_cache: Dict[str, Any] = {}
+        self._invalid_models: Set[str] = set()
+        self._quota_blocked_until: Dict[str, float] = {}
 
         fallback_models = os.getenv(
             "GEMINI_FALLBACK_MODELS",
-            "gemini-2.5-flash,gemini-1.5-flash,gemini-1.5-pro",
+            "gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite",
         )
         configured = [m.strip() for m in fallback_models.split(",") if m.strip()]
-        self._candidate_models = [self.model_name] + [m for m in configured if m != self.model_name]
+        initial_candidates = [self.model_name] + [m for m in configured if m != self.model_name]
+        self._candidate_models = self._dedupe_models(initial_candidates)
+        self._preferred_model = self.model_name
 
         if self.api_key:
             try:
                 genai.configure(api_key=self.api_key)
+                discovered_models = self._discover_supported_generate_models()
+                self._candidate_models = self._resolve_candidate_models(
+                    self._candidate_models,
+                    discovered_models,
+                )
+                if self._candidate_models:
+                    self._preferred_model = self._candidate_models[0]
+                    self.model_name = self._preferred_model
                 self.model = self._build_model(self.model_name)
                 self.is_initialized = True
-                logger.info(f"✅ Gemini configured with primary model: {self.model_name}")
+                logger.info(
+                    "✅ Gemini configured with primary model: %s (candidates: %s)",
+                    self.model_name,
+                    ", ".join(self._candidate_models),
+                )
             except Exception as e:
                 logger.error(f"❌ Failed to configure Gemini: {e}")
                 self.model = None
                 self.is_initialized = False
         else:
             logger.warning("⚠️ GEMINI_API_KEY not set. Using fallback remediation guidance.")
+
+    def _dedupe_models(self, model_names: List[str]) -> List[str]:
+        """Return models in stable order without duplicates."""
+        deduped: List[str] = []
+        seen = set()
+        for raw_name in model_names:
+            model_name = self._normalize_model_name(raw_name)
+            if not model_name or model_name in seen:
+                continue
+            seen.add(model_name)
+            deduped.append(model_name)
+        return deduped
+
+    def _normalize_model_name(self, model_name: str) -> str:
+        """Normalize model names from API format and config format."""
+        value = (model_name or "").strip()
+        if value.startswith("models/"):
+            return value.split("/", 1)[1]
+        return value
+
+    def _discover_supported_generate_models(self) -> Optional[List[str]]:
+        """
+        Discover models that support generateContent.
+
+        Returns None when discovery is unavailable so caller can retain configured candidates.
+        """
+        try:
+            discovered: List[str] = []
+            for model in genai.list_models():
+                methods = getattr(model, "supported_generation_methods", []) or []
+                if "generateContent" not in methods:
+                    continue
+                normalized = self._normalize_model_name(getattr(model, "name", ""))
+                if normalized:
+                    discovered.append(normalized)
+            return self._dedupe_models(discovered)
+        except Exception as e:
+            logger.warning("Could not discover Gemini models via ListModels: %s", e)
+            return None
+
+    def _resolve_candidate_models(
+        self,
+        configured_models: List[str],
+        discovered_models: Optional[List[str]],
+    ) -> List[str]:
+        """Filter configured model candidates against available models when possible."""
+        configured = self._dedupe_models(configured_models)
+        if not discovered_models:
+            return configured
+
+        discovered = set(discovered_models)
+        valid = [model for model in configured if model in discovered]
+        if valid:
+            return valid
+
+        preferred_prefixes = (
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+        )
+        selected: List[str] = []
+        for prefix in preferred_prefixes:
+            for model in discovered_models:
+                if model == prefix or model.startswith(prefix):
+                    selected.append(model)
+            if selected:
+                break
+        if selected:
+            return self._dedupe_models(selected)
+
+        return discovered_models[:3]
+
+    def _is_model_not_found_error(self, error_message: str) -> bool:
+        """Detect unsupported or missing Gemini model errors."""
+        lowered = error_message.lower()
+        return (
+            "not found for api version" in lowered
+            or "is not found" in lowered
+            or "not supported for generatecontent" in lowered
+        )
+
+    def _is_quota_error(self, error_message: str) -> bool:
+        """Detect Gemini quota/rate-limit errors."""
+        lowered = error_message.lower()
+        return "quota" in lowered or "rate limit" in lowered or lowered.startswith("429")
+
+    def _extract_retry_delay_seconds(self, error_message: str) -> Optional[float]:
+        """Extract retry delay from Gemini error payload when available."""
+        retry_in = re.search(r"retry in ([0-9]+(?:\.[0-9]+)?)s", error_message, flags=re.IGNORECASE)
+        if retry_in:
+            return float(retry_in.group(1))
+
+        retry_seconds = re.search(r"seconds:\s*([0-9]+)", error_message)
+        if retry_seconds:
+            return float(retry_seconds.group(1))
+
+        return None
 
     def _build_model(self, model_name: str):
         """Build a generative model instance for a specific model name."""
@@ -101,8 +215,19 @@ class GeminiService:
             raise RuntimeError("GEMINI_API_KEY is not configured")
 
         last_error: Optional[Exception] = None
+        attempted = False
 
-        for candidate in self._candidate_models:
+        candidates = self._dedupe_models([self._preferred_model, *self._candidate_models])
+        now = time.time()
+        for candidate in candidates:
+            if candidate in self._invalid_models:
+                continue
+
+            blocked_until = self._quota_blocked_until.get(candidate, 0.0)
+            if blocked_until > now:
+                continue
+
+            attempted = True
             model = self._get_or_create_model(candidate)
             for attempt in range(max_retries):
                 try:
@@ -113,13 +238,31 @@ class GeminiService:
                     response = model.generate_content(prompt)
                     response_text = self._extract_response_text(response)
                     if response_text and len(response_text.strip()) > 20:
-                        self.model_name = candidate
-                        self.model = model
                         self.is_initialized = True
                         return response_text.strip(), candidate
                     last_error = RuntimeError("Gemini returned empty or too-short content")
                 except Exception as e:
                     last_error = e
+                    error_message = str(e)
+
+                    if self._is_model_not_found_error(error_message):
+                        self._invalid_models.add(candidate)
+                        logger.warning(
+                            "Gemini model %s is unavailable for generateContent; skipping it.",
+                            candidate,
+                        )
+                        break
+
+                    if self._is_quota_error(error_message):
+                        retry_delay = self._extract_retry_delay_seconds(error_message) or 60.0
+                        self._quota_blocked_until[candidate] = time.time() + retry_delay
+                        logger.warning(
+                            "Gemini quota hit for model %s; temporarily skipping for %.1fs",
+                            candidate,
+                            retry_delay,
+                        )
+                        break
+
                     logger.warning(
                         f"Gemini model {candidate} failed on attempt {attempt + 1}: {e}"
                     )
@@ -127,6 +270,8 @@ class GeminiService:
                         time.sleep(2 ** attempt)
 
         self.is_initialized = False
+        if not attempted:
+            raise RuntimeError("No Gemini candidate models are currently available.")
         if last_error:
             raise last_error
         raise RuntimeError("Gemini generation failed with unknown error")
@@ -178,7 +323,7 @@ Remediation:"""
                 "text": text,
                 "provider": "gemini",
                 "model": model_used,
-                "fallback_used": False,
+                "fallback_used": model_used != self._preferred_model,
             }
             self._cache[cache_key] = response
             return response

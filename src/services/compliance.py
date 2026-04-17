@@ -114,7 +114,7 @@ class ComplianceService:
                     remediation = self.gemini_service.generate_remediation_response(
                         issue_description=issue['description'],
                         standard=issue['standard'],
-                        require_gemini=bool(self.gemini_service.api_key),
+                        require_gemini=False,
                     )
                     if remediation.get('fallback_used'):
                         gemini_fallback_count += 1

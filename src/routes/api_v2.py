@@ -216,7 +216,7 @@ def _analyze_document_from_buffer(
     pii_sensitivity = options.get("piiSensitivity", "medium")
     require_gemini_remediation = options.get(
         "requireGeminiRemediation",
-        bool(gemini_service.api_key),
+        False,
     )
     page_range = _parse_page_range(options.get("pageRange"))
 
@@ -592,7 +592,7 @@ def auto_remediate():
             return jsonify({"success": False, "error": "fileUrl is required"}), 400
 
         incoming_issues = data.get("issues")
-        require_gemini = bool(data.get("requireGemini", bool(gemini_service.api_key)))
+        require_gemini = bool(data.get("requireGemini", False))
         include_ai_guidance = bool(data.get("includeAIGuidance", True))
 
         with ephemeral_handler.ephemeral_file_context(data["fileUrl"]) as (file_buffer, filename):
@@ -652,7 +652,7 @@ def get_remediation_guidance():
 
         issue_type = data["issueType"]
         issue_description = data.get("issueDescription", issue_type)
-        require_gemini = bool(data.get("requireGemini", bool(gemini_service.api_key)))
+        require_gemini = bool(data.get("requireGemini", False))
 
         guidance = remediation_engine.get_user_action_template(issue_type)
         if not guidance:

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pypdf
+from src.routes import api_v2 as api_v2_routes
 
 
 def _create_test_pdf(path: Path) -> Path:
@@ -113,6 +114,88 @@ def test_analyze_upload_endpoint(client, tmp_path):
     assert payload["success"] is True
     assert payload["documentName"] == "upload.pdf"
     assert "pageSummary" in payload
+
+
+def test_analyze_upload_defaults_to_non_strict_gemini(client, tmp_path, monkeypatch):
+    pdf_path = _create_test_pdf(tmp_path / "upload-default-nonstrict.pdf")
+    pdf_bytes = pdf_path.read_bytes()
+    require_flags = []
+
+    def fake_generate(*, issue_description, standard, require_gemini=False, max_retries=3):
+        require_flags.append(require_gemini)
+        if require_gemini:
+            raise RuntimeError("Gemini unavailable")
+        return {
+            "text": "Fallback remediation guidance.",
+            "provider": "fallback",
+            "model": None,
+            "fallback_used": True,
+        }
+
+    monkeypatch.setattr(api_v2_routes.gemini_service, "api_key", "configured-key")
+    monkeypatch.setattr(
+        api_v2_routes.gemini_service,
+        "generate_remediation_response",
+        fake_generate,
+    )
+
+    response = client.post(
+        "/api/v2/analyze/upload",
+        data={
+            "file": (io.BytesIO(pdf_bytes), "upload-default-nonstrict.pdf"),
+            "options": json.dumps({"detectPII": False, "pageLevel": False, "validateAI": False}),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert require_flags
+    assert all(flag is False for flag in require_flags)
+
+
+def test_analyze_upload_honors_strict_gemini_option(client, tmp_path, monkeypatch):
+    pdf_path = _create_test_pdf(tmp_path / "upload-strict.pdf")
+    pdf_bytes = pdf_path.read_bytes()
+
+    def fake_generate(*, issue_description, standard, require_gemini=False, max_retries=3):
+        if require_gemini:
+            raise RuntimeError("Gemini unavailable")
+        return {
+            "text": "Fallback remediation guidance.",
+            "provider": "fallback",
+            "model": None,
+            "fallback_used": True,
+        }
+
+    monkeypatch.setattr(api_v2_routes.gemini_service, "api_key", "configured-key")
+    monkeypatch.setattr(
+        api_v2_routes.gemini_service,
+        "generate_remediation_response",
+        fake_generate,
+    )
+
+    response = client.post(
+        "/api/v2/analyze/upload",
+        data={
+            "file": (io.BytesIO(pdf_bytes), "upload-strict.pdf"),
+            "options": json.dumps(
+                {
+                    "detectPII": False,
+                    "pageLevel": False,
+                    "validateAI": False,
+                    "requireGeminiRemediation": True,
+                }
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 500
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert "Gemini unavailable" in payload["error"]
 
 
 def test_compatibility_page_endpoints(client, tmp_path):
