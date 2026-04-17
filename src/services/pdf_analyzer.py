@@ -197,7 +197,8 @@ class PDFAnalyzer:
                 if isinstance(mark_info, pypdf.generic.IndirectObject):
                     mark_info = mark_info.get_object()
                 
-                if mark_info and mark_info.get('/Marked') is True:
+                marked = mark_info.get('/Marked') if mark_info else None
+                if marked is not None and bool(marked):
                     return True
             
             return False

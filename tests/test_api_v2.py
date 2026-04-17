@@ -252,6 +252,57 @@ def test_download_auto_remediated_pdf_from_upload(client, tmp_path):
     assert "attachment" in response.headers.get("Content-Disposition", "")
 
 
+def test_auto_remediation_download_reduces_fixed_issues(client, tmp_path):
+    source_pdf = tmp_path / "needs-remediation.pdf"
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    with open(source_pdf, "wb") as file_obj:
+        writer.write(file_obj)
+    source_bytes = source_pdf.read_bytes()
+
+    baseline = client.post(
+        "/api/v2/analyze/upload",
+        data={
+            "file": (io.BytesIO(source_bytes), "needs-remediation.pdf"),
+            "options": json.dumps({"detectPII": False, "pageLevel": False, "validateAI": False}),
+        },
+        content_type="multipart/form-data",
+    )
+    assert baseline.status_code == 200
+    baseline_payload = baseline.get_json()
+    baseline_issue_descriptions = [issue["description"] for issue in baseline_payload["issues"]]
+    assert any("language is not declared" in desc.lower() for desc in baseline_issue_descriptions)
+    assert any("metadata is missing or incomplete" in desc.lower() for desc in baseline_issue_descriptions)
+
+    remediated_download = client.post(
+        "/api/v2/remediate/auto/download",
+        data={
+            "file": (io.BytesIO(source_bytes), "needs-remediation.pdf"),
+            "issues": json.dumps(baseline_payload["issues"]),
+        },
+        content_type="multipart/form-data",
+    )
+    assert remediated_download.status_code == 200
+    remediated_bytes = remediated_download.data
+    assert remediated_bytes.startswith(b"%PDF")
+
+    after = client.post(
+        "/api/v2/analyze/upload",
+        data={
+            "file": (io.BytesIO(remediated_bytes), "needs-remediation-auto.pdf"),
+            "options": json.dumps({"detectPII": False, "pageLevel": False, "validateAI": False}),
+        },
+        content_type="multipart/form-data",
+    )
+    assert after.status_code == 200
+    after_payload = after.get_json()
+    after_issue_descriptions = [issue["description"] for issue in after_payload["issues"]]
+
+    assert not any("language is not declared" in desc.lower() for desc in after_issue_descriptions)
+    assert not any("metadata is missing or incomplete" in desc.lower() for desc in after_issue_descriptions)
+    assert after_payload["totalIssues"] < baseline_payload["totalIssues"]
+
+
 def test_compatibility_page_endpoints(client, tmp_path):
     pdf_path = _create_test_pdf(tmp_path / "compat.pdf")
 

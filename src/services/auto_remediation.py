@@ -258,14 +258,18 @@ class AutoRemediationEngine:
         """Classify issue type for remediation"""
         description = issue.get('description', '').lower()
         
-        if 'language' in description and 'not declared' in description:
+        if 'language' in description and (
+            'not declared' in description
+            or 'does not declare' in description
+            or 'missing' in description
+        ):
             return 'missing_language'
         elif 'title' in description and 'missing' in description:
             return 'missing_title'
         elif 'metadata' in description:
             return 'missing_metadata'
         elif 'tag tree' in description:
-            return 'no_tag_tree'
+            return 'pdf_ua_flag'
         elif 'alternative text' in description or 'alt text' in description:
             return 'missing_alt_text'
         elif 'form field' in description:
@@ -347,6 +351,28 @@ class AutoRemediationEngine:
             }
             if metadata:
                 pdf_writer.add_metadata(metadata)
+
+        root = pdf_reader.trailer.get('/Root')
+        if isinstance(root, pypdf.generic.IndirectObject):
+            root = root.get_object()
+
+        if root:
+            lang = root.get('/Lang')
+            if lang:
+                pdf_writer._root_object[pypdf.generic.NameObject('/Lang')] = \
+                    pypdf.generic.TextStringObject(str(lang))
+
+            mark_info = root.get('/MarkInfo')
+            if mark_info:
+                if isinstance(mark_info, pypdf.generic.IndirectObject):
+                    mark_info = mark_info.get_object()
+                if isinstance(mark_info, pypdf.generic.DictionaryObject):
+                    marked = mark_info.get('/Marked')
+                    if marked is not None:
+                        mark_info_out = pypdf.generic.DictionaryObject()
+                        mark_info_out[pypdf.generic.NameObject('/Marked')] = \
+                            pypdf.generic.BooleanObject(bool(marked))
+                        pdf_writer._root_object[pypdf.generic.NameObject('/MarkInfo')] = mark_info_out
 
         return pdf_writer
 
@@ -452,9 +478,16 @@ class AutoRemediationEngine:
         """Add basic document metadata"""
         try:
             pdf_writer = self._build_writer_from_buffer(file_buffer)
+
+            derived_title = filename.replace('.pdf', '').replace('_', ' ').replace('-', ' ').strip()
+            if not derived_title:
+                derived_title = 'Document'
+            derived_title = derived_title.title()
             
             # Add metadata
             metadata = {
+                '/Title': derived_title,
+                '/Subject': 'Accessibility remediated document',
                 '/Producer': 'PDF Accessibility Compliance Engine',
                 '/Creator': 'Auto Remediation',
                 '/CreationDate': datetime.utcnow().strftime('D:%Y%m%d%H%M%S')
