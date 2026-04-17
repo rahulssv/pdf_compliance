@@ -107,23 +107,34 @@ class ComplianceService:
                 
                 # Add remediation guidance to each issue using Gemini
                 issues_with_fixes = []
+                gemini_fallback_count = 0
                 for issue_idx, issue in enumerate(analysis['issues'], 1):
                     logger.info(f"  🤖 Generating fix {issue_idx}/{len(analysis['issues'])}")
-                    
-                    fix = self.gemini_service.generate_remediation(
-                        issue['description'],
-                        issue['standard']
+
+                    remediation = self.gemini_service.generate_remediation_response(
+                        issue_description=issue['description'],
+                        standard=issue['standard'],
+                        require_gemini=bool(self.gemini_service.api_key),
                     )
+                    if remediation.get('fallback_used'):
+                        gemini_fallback_count += 1
                     
                     issues_with_fixes.append({
                         'description': issue['description'],
                         'standard': issue['standard'],
-                        'fix': fix
+                        'fix': remediation['text'],
+                        'remediationProvider': remediation.get('provider'),
+                        'remediationModel': remediation.get('model'),
+                        'fallbackUsed': remediation.get('fallback_used', False),
                     })
                 
                 files_results.append({
                     'fileName': filename,
-                    'issues': issues_with_fixes
+                    'issues': issues_with_fixes,
+                    'remediationMetadata': {
+                        'geminiConfigured': bool(self.gemini_service.api_key),
+                        'geminiFallbackCount': gemini_fallback_count,
+                    }
                 })
                 
                 logger.info(f"  ✅ Generated {len(issues_with_fixes)} remediation(s)")
@@ -324,4 +335,3 @@ class ComplianceService:
             return 'EAA'
         else:
             return standard
-

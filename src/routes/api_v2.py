@@ -117,21 +117,38 @@ def _wcag_level(score: float) -> str:
     return "non-compliant"
 
 
-def _build_recommendations(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_recommendations(
+    issues: List[Dict[str, Any]],
+    require_gemini: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     recommendations: List[Dict[str, Any]] = []
-    for issue in issues[:3]:
-        action = gemini_service.generate_remediation(
-            issue.get("description", ""),
-            issue.get("standard", "N/A"),
+    fallback_count = 0
+
+    for issue in issues:
+        remediation = gemini_service.generate_remediation_response(
+            issue_description=issue.get("description", ""),
+            standard=issue.get("standard", "N/A"),
+            require_gemini=require_gemini,
         )
+        if remediation.get("fallback_used"):
+            fallback_count += 1
+
         recommendations.append(
             {
                 "priority": issue.get("severity", "medium"),
-                "action": action,
+                "action": remediation["text"],
                 "benefit": f"Improves alignment with {issue.get('standard', 'accessibility requirements')}.",
+                "provider": remediation.get("provider"),
+                "model": remediation.get("model"),
+                "fallbackUsed": remediation.get("fallback_used", False),
             }
         )
-    return recommendations
+    metadata = {
+        "geminiConfigured": bool(gemini_service.api_key),
+        "fallbackCount": fallback_count,
+        "generatedCount": len(recommendations),
+    }
+    return recommendations, metadata
 
 
 def _build_validation_metrics(
@@ -197,13 +214,20 @@ def _analyze_document_from_buffer(
     auto_remediate = options.get("autoRemediate", False)
     validate_ai = options.get("validateAI", True)
     pii_sensitivity = options.get("piiSensitivity", "medium")
+    require_gemini_remediation = options.get(
+        "requireGeminiRemediation",
+        bool(gemini_service.api_key),
+    )
     page_range = _parse_page_range(options.get("pageRange"))
 
     base = pdf_analyzer.analyze_pdf_buffer(file_buffer, filename)
     issues = [_normalize_issue(issue) for issue in base.get("issues", [])]
 
     compliance_score = max(0, 100 - base.get("nonCompliancePercent", 100))
-    recommendations = _build_recommendations(issues)
+    recommendations, recommendation_meta = _build_recommendations(
+        issues,
+        require_gemini=require_gemini_remediation,
+    )
 
     result: Dict[str, Any] = {
         "documentName": filename,
@@ -218,6 +242,7 @@ def _analyze_document_from_buffer(
         "lowIssues": sum(1 for issue in issues if issue["severity"] == "low"),
         "issues": issues,
         "recommendations": recommendations,
+        "remediationMetadata": recommendation_meta,
         "memoryUsage": ephemeral_handler.get_memory_usage(),
     }
 
@@ -567,6 +592,8 @@ def auto_remediate():
             return jsonify({"success": False, "error": "fileUrl is required"}), 400
 
         incoming_issues = data.get("issues")
+        require_gemini = bool(data.get("requireGemini", bool(gemini_service.api_key)))
+        include_ai_guidance = bool(data.get("includeAIGuidance", True))
 
         with ephemeral_handler.ephemeral_file_context(data["fileUrl"]) as (file_buffer, filename):
             if incoming_issues is None:
@@ -581,6 +608,35 @@ def auto_remediate():
                 filename=filename,
                 issues=issues,
             )
+
+            if include_ai_guidance:
+                ai_guidance = []
+                fallback_count = 0
+                for issue in issues:
+                    remediation = gemini_service.generate_remediation_response(
+                        issue_description=issue.get("description", ""),
+                        standard=issue.get("standard", "N/A"),
+                        require_gemini=require_gemini,
+                    )
+                    if remediation.get("fallback_used"):
+                        fallback_count += 1
+                    ai_guidance.append(
+                        {
+                            "description": issue.get("description", ""),
+                            "standard": issue.get("standard", "N/A"),
+                            "guidance": remediation["text"],
+                            "provider": remediation.get("provider"),
+                            "model": remediation.get("model"),
+                            "fallbackUsed": remediation.get("fallback_used", False),
+                        }
+                    )
+                result["aiGuidance"] = ai_guidance
+                result["aiGuidanceMetadata"] = {
+                    "geminiConfigured": bool(gemini_service.api_key),
+                    "generatedCount": len(ai_guidance),
+                    "fallbackCount": fallback_count,
+                }
+
             return jsonify({"success": True, **result}), 200
     except Exception as e:
         logger.error(f"Error in auto-remediation: {e}", exc_info=True)
@@ -596,6 +652,7 @@ def get_remediation_guidance():
 
         issue_type = data["issueType"]
         issue_description = data.get("issueDescription", issue_type)
+        require_gemini = bool(data.get("requireGemini", bool(gemini_service.api_key)))
 
         guidance = remediation_engine.get_user_action_template(issue_type)
         if not guidance:
@@ -604,7 +661,22 @@ def get_remediation_guidance():
                 issue={"description": issue_description},
             )
 
-        return jsonify({"success": True, "guidance": asdict(guidance)}), 200
+        gemini_guidance = gemini_service.generate_remediation_response(
+            issue_description=issue_description,
+            standard=data.get("standard", "WCAG 2.1"),
+            require_gemini=require_gemini,
+        )
+
+        return jsonify(
+            {
+                "success": True,
+                "guidance": asdict(guidance),
+                "aiGuidance": gemini_guidance["text"],
+                "aiProvider": gemini_guidance.get("provider"),
+                "aiModel": gemini_guidance.get("model"),
+                "fallbackUsed": gemini_guidance.get("fallback_used", False),
+            }
+        ), 200
     except Exception as e:
         logger.error(f"Error getting remediation guidance: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
