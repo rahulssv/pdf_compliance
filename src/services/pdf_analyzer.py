@@ -2,6 +2,7 @@
 import os
 import logging
 from typing import Dict, List, Any, Optional
+from io import BytesIO
 import pypdf
 import pdfplumber
 from src.utils.standards import map_issue_to_standard
@@ -27,12 +28,34 @@ class PDFAnalyzer:
         Returns:
             Dictionary with analysis results
         """
-        # Check cache
         cache_key = f"{file_path}:{os.path.getmtime(file_path)}"
+        with open(file_path, 'rb') as f:
+            pdf_bytes = f.read()
+        return self._analyze_pdf_bytes(pdf_bytes, filename, cache_key)
+    
+    def analyze_pdf_buffer(self, file_buffer: BytesIO, filename: str) -> Dict[str, Any]:
+        """
+        Analyze a PDF directly from memory without touching disk.
+        
+        Args:
+            file_buffer: PDF bytes in memory
+            filename: Original filename
+        
+        Returns:
+            Dictionary with analysis results
+        """
+        file_buffer.seek(0)
+        pdf_bytes = file_buffer.read()
+        cache_key = f"buffer:{hash(pdf_bytes)}"
+        return self._analyze_pdf_bytes(pdf_bytes, filename, cache_key)
+    
+    def _analyze_pdf_bytes(self, pdf_bytes: bytes, filename: str, cache_key: str) -> Dict[str, Any]:
+        """Analyze raw PDF bytes with shared logic for file and in-memory paths."""
+        # Check cache
         if cache_key in self._analysis_cache:
             logger.info(f"📦 Using cached analysis for {filename}")
             cached = self._analysis_cache[cache_key].copy()
-            cached['fileName'] = filename  # Update filename
+            cached['fileName'] = filename
             return cached
         
         issues = []
@@ -44,46 +67,45 @@ class PDFAnalyzer:
             logger.info(f"🔍 Analyzing {filename}...")
             
             # Analyze with pypdf for structure
-            with open(file_path, 'rb') as f:
-                pdf_reader = pypdf.PdfReader(f)
-                
-                # Check for tag tree (PDF/UA requirement)
-                has_tag_tree = self._has_tag_tree(pdf_reader)
-                if not has_tag_tree:
-                    issues.append(self._create_issue(
-                        'no_tag_tree',
-                        'Document does not contain a tag tree, so screen readers cannot interpret structural semantics.'
-                    ))
-                    logger.info("  ❌ No tag tree found")
-                else:
-                    logger.info("  ✅ Tag tree present")
-                    # Check for Figure elements with/without alt text
-                    figures_with_alt, figures_without_alt = self._check_figure_alt_text(pdf_reader)
-                    logger.info(f"  📊 Figures with alt: {figures_with_alt}, without alt: {figures_without_alt}")
-                
-                # Check for document language
-                if not self._has_language(pdf_reader):
-                    issues.append(self._create_issue(
-                        'missing_language',
-                        'Document language is not declared at the document level.'
-                    ))
-                    logger.info("  ❌ No language declaration")
-                else:
-                    logger.info("  ✅ Language declaration present")
-                
-                # Check metadata
-                metadata = pdf_reader.metadata
-                if not self._has_complete_metadata(metadata):
-                    issues.append(self._create_issue(
-                        'poor_structure',
-                        'Document metadata is missing or incomplete, affecting discoverability.'
-                    ))
-                    logger.info("  ❌ Incomplete metadata")
-                else:
-                    logger.info("  ✅ Metadata complete")
+            pdf_reader = pypdf.PdfReader(BytesIO(pdf_bytes))
+            
+            # Check for tag tree (PDF/UA requirement)
+            has_tag_tree = self._has_tag_tree(pdf_reader)
+            if not has_tag_tree:
+                issues.append(self._create_issue(
+                    'no_tag_tree',
+                    'Document does not contain a tag tree, so screen readers cannot interpret structural semantics.'
+                ))
+                logger.info("  ❌ No tag tree found")
+            else:
+                logger.info("  ✅ Tag tree present")
+                # Check for Figure elements with/without alt text
+                figures_with_alt, figures_without_alt = self._check_figure_alt_text(pdf_reader)
+                logger.info(f"  📊 Figures with alt: {figures_with_alt}, without alt: {figures_without_alt}")
+            
+            # Check for document language
+            if not self._has_language(pdf_reader):
+                issues.append(self._create_issue(
+                    'missing_language',
+                    'Document language is not declared at the document level.'
+                ))
+                logger.info("  ❌ No language declaration")
+            else:
+                logger.info("  ✅ Language declaration present")
+            
+            # Check metadata
+            metadata = pdf_reader.metadata
+            if not self._has_complete_metadata(metadata):
+                issues.append(self._create_issue(
+                    'poor_structure',
+                    'Document metadata is missing or incomplete, affecting discoverability.'
+                ))
+                logger.info("  ❌ Incomplete metadata")
+            else:
+                logger.info("  ✅ Metadata complete")
             
             # Analyze with pdfplumber for content
-            with pdfplumber.open(file_path) as pdf:
+            with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
                 # Check for images - but only flag if structure tree shows missing alt text
                 has_images, image_count = self._check_images(pdf)
                 
@@ -418,4 +440,3 @@ class PDFAnalyzer:
             return 'partially-compliant'
         else:
             return 'non-compliant'
-

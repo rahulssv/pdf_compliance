@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF Compliance UI</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    h1 { margin: 0 0 14px; font-size: 1.5rem; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+    .dropzone { border: 2px dashed #475569; border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; }
+    .dropzone.dragging { border-color: #38bdf8; background: #0c253a; }
+    .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    label { display: block; font-size: .85rem; margin-bottom: 5px; color: #cbd5e1; }
+    select, button, input[type=file] { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; }
+    button { cursor: pointer; }
+    button.primary { background: #0284c7; border-color: #0284c7; font-weight: 600; }
+    button.secondary { background: #1e293b; }
+    .progress { height: 8px; background: #0f172a; border-radius: 999px; overflow: hidden; }
+    .bar { height: 100%; width: 0; background: #22c55e; transition: width .2s ease; }
+    .muted { color: #94a3b8; font-size: .9rem; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+    .stat { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #334155; margin: 2px; font-size: .75rem; }
+    .issue { border-left: 4px solid #f59e0b; padding: 8px 10px; margin: 8px 0; background: #0f172a; border-radius: 6px; }
+    .issue.high, .issue.critical { border-left-color: #ef4444; }
+    .issue.medium { border-left-color: #f59e0b; }
+    .issue.low { border-left-color: #22c55e; }
+    .pages { display: grid; grid-template-columns: 160px 1fr; gap: 10px; }
+    .page-nav { max-height: 250px; overflow: auto; border-right: 1px solid #334155; }
+    .page-btn { width: 100%; text-align: left; margin-bottom: 6px; }
+    .hidden { display: none; }
+    @media (max-width: 900px) {
+      .row, .row3, .stats, .pages { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>PDF Accessibility Compliance Engine</h1>
+
+    <div class="card">
+      <div id="dropzone" class="dropzone">
+        <p><strong>Drop a PDF here</strong> or click to choose a file</p>
+        <input id="fileInput" type="file" accept="application/pdf" class="hidden">
+      </div>
+      <p id="selectedFile" class="muted">No file selected</p>
+
+      <div class="row3">
+        <div>
+          <label for="piiSensitivity">PII sensitivity</label>
+          <select id="piiSensitivity">
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="maximum">Maximum</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div>
+          <label><input id="pageLevel" type="checkbox" checked> Page-level analysis</label>
+          <label><input id="autoRemediate" type="checkbox"> Auto-remediate</label>
+          <label><input id="validateAI" type="checkbox" checked> Validate AI output</label>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="analyzeBtn" class="primary">Analyze</button>
+        </div>
+      </div>
+
+      <div class="card hidden" id="progressWrap">
+        <div class="progress"><div id="progressBar" class="bar"></div></div>
+        <p id="statusText" class="muted">Uploading...</p>
+      </div>
+    </div>
+
+    <div id="resultWrap" class="hidden">
+      <div class="card">
+        <div class="row">
+          <div>
+            <h2 id="docName" style="margin:0 0 6px;font-size:1.1rem;"></h2>
+            <p id="complianceText" class="muted"></p>
+          </div>
+          <div class="row">
+            <button data-format="json" class="secondary exportBtn">Export JSON</button>
+            <button data-format="csv" class="secondary exportBtn">Export CSV</button>
+            <button data-format="html" class="secondary exportBtn">Export HTML</button>
+            <button data-format="markdown" class="secondary exportBtn">Export Markdown</button>
+          </div>
+        </div>
+        <div id="stats" class="stats"></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">PII Highlights</h3>
+        <div id="piiBox" class="muted">No PII summary available.</div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Issues</h3>
+        <div id="issues"></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Remediation Actions</h3>
+        <div id="recommendations"></div>
+      </div>
+
+      <div class="card hidden" id="pagesWrap">
+        <h3 style="margin-top:0">Page-by-page View</h3>
+        <div class="pages">
+          <div id="pageNav" class="page-nav"></div>
+          <div id="pageDetail" class="muted">Select a page.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let selectedFile = null;
+    let lastAnalysis = null;
+    let progressTimer = null;
+    const fileInput = document.getElementById('fileInput');
+    const dropzone = document.getElementById('dropzone');
+    const selectedFileText = document.getElementById('selectedFile');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const resultWrap = document.getElementById('resultWrap');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('statusText');
+
+    const setSelectedFile = (file) => {
+      selectedFile = file;
+      selectedFileText.textContent = file ? `Selected: ${file.name} (${Math.round(file.size / 1024)} KB)` : 'No file selected';
+    };
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => setSelectedFile(e.target.files[0]));
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragging'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragging'));
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragging');
+      setSelectedFile(e.dataTransfer.files[0]);
+    });
+
+    const startProgress = () => {
+      progressWrap.classList.remove('hidden');
+      let width = 0;
+      progressTimer = setInterval(() => {
+        width = Math.min(width + Math.random() * 12, 90);
+        progressBar.style.width = `${width}%`;
+      }, 250);
+    };
+
+    const stopProgress = (ok, message) => {
+      clearInterval(progressTimer);
+      progressBar.style.width = ok ? '100%' : '0%';
+      statusText.textContent = message;
+      setTimeout(() => progressWrap.classList.add('hidden'), 800);
+    };
+
+    const renderStats = (data) => {
+      const items = [
+        ['Compliance Score', `${Math.round(data.complianceScore || 0)} / 100`],
+        ['Issues', data.totalIssues || 0],
+        ['Auto-fixable', data.autoFixable || 0],
+        ['Manual fixes', data.manualFixesRequired || 0]
+      ];
+      document.getElementById('stats').innerHTML = items.map(([k, v]) => `<div class="stat"><div class="muted">${k}</div><strong>${v}</strong></div>`).join('');
+    };
+
+    const renderPII = (data) => {
+      const pii = data.piiDetected;
+      if (!pii) {
+        document.getElementById('piiBox').textContent = 'PII detection was not enabled for this run.';
+        return;
+      }
+      const pills = (pii.types || []).map(t => `<span class="pill">${t}</span>`).join('');
+      document.getElementById('piiBox').innerHTML = `
+        <p><strong>Detected:</strong> ${pii.detected ? 'Yes' : 'No'} | <strong>Total instances:</strong> ${pii.totalInstances || 0}</p>
+        <div>${pills || '<span class="muted">No PII types detected</span>'}</div>
+      `;
+    };
+
+    const renderIssues = (data) => {
+      const issues = data.issues || [];
+      if (!issues.length) {
+        document.getElementById('issues').innerHTML = '<p class="muted">No issues found.</p>';
+        return;
+      }
+      document.getElementById('issues').innerHTML = issues.map(issue => `
+        <div class="issue ${issue.severity || 'low'}">
+          <strong>${issue.standard || 'N/A'}</strong>
+          <div>${issue.description || ''}</div>
+          <div class="muted">Severity: ${issue.severity || 'low'} · Complexity: ${issue.remediation_complexity || 'medium'}</div>
+        </div>
+      `).join('');
+    };
+
+    const renderRecommendations = (data) => {
+      const recs = data.recommendations || [];
+      if (!recs.length) {
+        document.getElementById('recommendations').innerHTML = '<p class="muted">No remediation recommendations generated.</p>';
+        return;
+      }
+      document.getElementById('recommendations').innerHTML = recs.map(rec => `
+        <div class="issue ${rec.priority || 'medium'}">
+          <strong>${rec.priority || 'medium'} priority</strong>
+          <div>${rec.action || ''}</div>
+          <div class="muted">${rec.benefit || ''}</div>
+        </div>
+      `).join('');
+    };
+
+    const renderPages = (data) => {
+      const pages = data.pageAnalyses || [];
+      const wrap = document.getElementById('pagesWrap');
+      if (!pages.length) {
+        wrap.classList.add('hidden');
+        return;
+      }
+      wrap.classList.remove('hidden');
+      const nav = document.getElementById('pageNav');
+      const detail = document.getElementById('pageDetail');
+      nav.innerHTML = pages.map((p, i) => `<button class="secondary page-btn" data-index="${i}">Page ${p.pageNumber} · Score ${p.complianceScore}</button>`).join('');
+      const draw = (index) => {
+        const page = pages[index];
+        detail.innerHTML = `
+          <h4>Page ${page.pageNumber}</h4>
+          <p class="muted">Issues: ${page.issueCount} · PII: ${page.piiDetected ? 'Yes' : 'No'}</p>
+          ${(page.issues || []).slice(0, 6).map(issue => `<div class="issue ${issue.severity || 'low'}">${issue.description}</div>`).join('') || '<p class="muted">No page issues.</p>'}
+        `;
+      };
+      draw(0);
+      nav.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', () => draw(Number(btn.dataset.index)));
+      });
+    };
+
+    const renderResult = (data) => {
+      document.getElementById('docName').textContent = data.documentName || 'Analyzed document';
+      document.getElementById('complianceText').textContent = `${data.complianceLevel || 'unknown'} · WCAG ${data.wcagLevel || 'N/A'}`;
+      renderStats(data);
+      renderPII(data);
+      renderIssues(data);
+      renderRecommendations(data);
+      renderPages(data);
+      resultWrap.classList.remove('hidden');
+    };
+
+    analyzeBtn.addEventListener('click', async () => {
+      if (!selectedFile) {
+        alert('Choose a PDF first.');
+        return;
+      }
+      const options = {
+        detectPII: true,
+        pageLevel: document.getElementById('pageLevel').checked,
+        autoRemediate: document.getElementById('autoRemediate').checked,
+        validateAI: document.getElementById('validateAI').checked,
+        piiSensitivity: document.getElementById('piiSensitivity').value
+      };
+      const form = new FormData();
+      form.append('file', selectedFile);
+      form.append('options', JSON.stringify(options));
+
+      try {
+        startProgress();
+        statusText.textContent = 'Analyzing PDF...';
+        const res = await fetch('/api/v2/analyze/upload', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Analysis failed');
+        }
+        lastAnalysis = data;
+        renderResult(data);
+        stopProgress(true, 'Analysis complete.');
+      } catch (err) {
+        stopProgress(false, err.message || 'Analysis failed.');
+      }
+    });
+
+    document.querySelectorAll('.exportBtn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!lastAnalysis) {
+          alert('Run analysis first.');
+          return;
+        }
+        const format = btn.dataset.format;
+        const res = await fetch('/api/v2/reports/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ analysisData: lastAnalysis, format })
+        });
+        if (!res.ok) {
+          alert('Export failed.');
+          return;
+        }
+        if (format === 'json') {
+          const payload = await res.json();
+          const blob = new Blob([JSON.stringify(payload.report, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'compliance_report.json';
+          a.click();
+          URL.revokeObjectURL(url);
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `compliance_report.${format}`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    });
+  </script>
+</body>
+</html>

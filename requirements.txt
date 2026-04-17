@@ -1,6 +1,7 @@
 # Web Framework
 flask==3.0.0
 flask-cors==4.0.0
+gunicorn==21.2.0
 
 # PDF Processing
 pypdf==3.17.4
@@ -9,14 +10,37 @@ pdfplumber==0.10.3
 # LLM Integration
 google-generativeai==0.3.2
 
+# PII Detection (NEW)
+presidio-analyzer==2.2.33
+presidio-anonymizer==2.2.33
+
 # HTTP Requests
 requests==2.31.0
 
 # Environment Variables
 python-dotenv==1.0.0
 
-# Production Server
-gunicorn==21.2.0
+# Security (NEW)
+cryptography==41.0.7
+
+# Validation (NEW)
+jsonschema==4.20.0
+
+# Reporting
+reportlab==4.2.0
+
+# Queue Management (NEW - for future batch processing)
+redis==5.0.0
 
 # Utilities
 urllib3==2.1.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-xdist==3.5.0
+pytest-asyncio==0.23.2
+pytest-timeout==2.2.0
+coverage==7.4.0
+faker==22.0.0

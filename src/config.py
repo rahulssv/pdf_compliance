@@ -19,10 +19,14 @@ class Config:
     # API Configuration
     API_VERSION = 'v1'
     API_PREFIX = f'/api/{API_VERSION}'
+    API_V2_PREFIX = '/api/v2'
     
     # PDF Processing Configuration
     MAX_FILE_SIZE_MB = 50
     SUPPORTED_LOCATOR_SCHEMES = ['http', 'https', 'file']
+    MAX_MEMORY_MB = int(os.getenv('MAX_MEMORY_MB', '100'))
+    EPHEMERAL_MODE = os.getenv('EPHEMERAL_MODE', 'true').lower() == 'true'
+    ENABLE_PII_DETECTION = os.getenv('ENABLE_PII_DETECTION', 'true').lower() == 'true'
     
     # Gemini Model Configuration
     GEMINI_MODEL = 'gemini-2.5-flash'
@@ -40,4 +44,3 @@ class Config:
 
 # Validate configuration on import
 Config.validate()
-
