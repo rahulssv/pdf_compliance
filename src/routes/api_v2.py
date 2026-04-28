@@ -93,12 +93,17 @@ def _classify_issue_for_remediation(description: str) -> str:
     return remediation_engine._classify_issue(issue)  # Reuse central classification logic.
 
 
-def _normalize_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_issue(issue: Dict[str, Any], default_location: str = "document") -> Dict[str, Any]:
     description = issue.get("description", "Unknown issue")
     severity = issue.get("severity") or _issue_severity(description)
     remediation_type = _classify_issue_for_remediation(description)
     auto_fixable = remediation_type in remediation_engine.auto_fixable_issues
     complexity = "easy" if auto_fixable else ("hard" if severity == "high" else "medium")
+    page_number = issue.get("pageNumber") or issue.get("page")
+    location = issue.get("location") or issue.get("scope") or default_location
+
+    if page_number is not None and location == "document":
+        location = f"page {page_number}"
 
     return {
         "category": issue.get("category", "General"),
@@ -106,11 +111,12 @@ def _normalize_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
         "wcag_criterion": issue.get("standard", "N/A"),
         "standard": issue.get("standard", "N/A"),
         "description": description,
-        "location": issue.get("scope", "document"),
+        "location": location,
         "impact": issue.get("impact", "Can reduce accessibility for assistive technology users."),
         "remediation_complexity": complexity,
         "estimated_time": issue.get("estimated_time", "5-20 minutes"),
         "auto_fixable": auto_fixable,
+        "pageNumber": page_number,
     }
 
 
@@ -211,6 +217,43 @@ def _build_validation_metrics(
     }
 
 
+def _merge_analysis_issues(
+    base_issues: List[Dict[str, Any]],
+    page_analyses: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    normalized_base = [_normalize_issue(issue) for issue in base_issues]
+    normalized_page = []
+
+    for page in page_analyses:
+        page_number = page.get("pageNumber")
+        for issue in page.get("issues", []):
+            normalized_page.append(
+                _normalize_issue(
+                    {**issue, "pageNumber": issue.get("pageNumber", page_number)},
+                    default_location=f"page {page_number}" if page_number is not None else "document",
+                )
+            )
+
+    merged = normalized_base + normalized_page
+    deduped = []
+    seen = set()
+
+    for issue in merged:
+        key = (
+            issue.get("standard"),
+            issue.get("description"),
+            issue.get("severity"),
+            issue.get("location"),
+            issue.get("pageNumber"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(issue)
+
+    return deduped
+
+
 def _analyze_document_from_buffer(
     file_buffer: BytesIO,
     filename: str,
@@ -228,7 +271,20 @@ def _analyze_document_from_buffer(
     page_range = _parse_page_range(options.get("pageRange"))
 
     base = pdf_analyzer.analyze_pdf_buffer(file_buffer, filename)
-    issues = [_normalize_issue(issue) for issue in base.get("issues", [])]
+    page_analyses: List[Dict[str, Any]] = []
+    page_result: Dict[str, Any] = {}
+
+    if page_level:
+        file_buffer.seek(0)
+        page_result = page_processor.analyze_document_by_pages(
+            file_buffer=file_buffer,
+            filename=filename,
+            page_range=page_range,
+            parallel=True,
+        )
+        page_analyses = page_result.get("pageAnalysis", [])
+
+    issues = _merge_analysis_issues(base.get("issues", []), page_analyses)
 
     compliance_score = max(0, 100 - base.get("nonCompliancePercent", 100))
     recommendations, recommendation_meta = _build_recommendations(
@@ -267,14 +323,7 @@ def _analyze_document_from_buffer(
         }
 
     if page_level:
-        file_buffer.seek(0)
-        page_result = page_processor.analyze_document_by_pages(
-            file_buffer=file_buffer,
-            filename=filename,
-            page_range=page_range,
-            parallel=True,
-        )
-        result["pageAnalyses"] = page_result.get("pageAnalysis", [])
+        result["pageAnalyses"] = page_analyses
         result["pageSummary"] = {
             "totalPages": page_result.get("totalPages", 0),
             "analyzedPages": page_result.get("analyzedPages", 0),
@@ -320,7 +369,7 @@ def _run_auto_remediation_with_pdf(
 ) -> Tuple[BytesIO, Dict[str, Any]]:
     if incoming_issues is None:
         analyzed = pdf_analyzer.analyze_pdf_buffer(file_buffer, filename)
-        issues = [_normalize_issue(issue) for issue in analyzed.get("issues", [])]
+        issues = _merge_analysis_issues(analyzed.get("issues", []), [])
     else:
         issues = [_normalize_issue(issue) for issue in incoming_issues]
 
@@ -767,7 +816,7 @@ def get_remediation_guidance():
         return jsonify(
             {
                 "success": True,
-                "guidance": asdict(guidance),
+                "guidance": asdict(guidance) if guidance else None,
                 "aiGuidance": gemini_guidance["text"],
                 "aiProvider": gemini_guidance.get("provider"),
                 "aiModel": gemini_guidance.get("model"),
