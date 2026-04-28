@@ -181,12 +181,56 @@
       }
     };
 
+    const severityWeights = {
+      critical: 35,
+      high: 20,
+      medium: 10,
+      low: 5
+    };
+
+    const getUnifiedStats = (data) => {
+      const issues = getUnifiedIssues(data);
+      const totalIssues = issues.length;
+      const autoFixable = issues.filter(issue => ['low', 'medium'].includes(String(issue.remediation_complexity || '').toLowerCase())).length;
+      const manualFixesRequired = Math.max(totalIssues - autoFixable, 0);
+
+      const totalPenalty = issues.reduce((sum, issue) => {
+        const severity = String(issue.severity || 'low').toLowerCase();
+        return sum + (severityWeights[severity] || severityWeights.low);
+      }, 0);
+
+      const derivedComplianceScore = totalIssues ? Math.max(0, 100 - totalPenalty) : 100;
+      const pageScores = Array.isArray(data.pageAnalyses)
+        ? data.pageAnalyses
+            .map(page => Number(page.complianceScore))
+            .filter(score => Number.isFinite(score))
+        : [];
+      const averagePageScore = pageScores.length
+        ? pageScores.reduce((sum, score) => sum + score, 0) / pageScores.length
+        : null;
+      const backendComplianceScore = Number(data.complianceScore);
+
+      const complianceScore = [
+        derivedComplianceScore,
+        averagePageScore,
+        Number.isFinite(backendComplianceScore) ? backendComplianceScore : null
+      ].find(score => Number.isFinite(score) && (totalIssues === 0 || score < 100)) ?? derivedComplianceScore;
+
+      return {
+        complianceScore,
+        totalIssues,
+        autoFixable,
+        manualFixesRequired
+      };
+    };
+
     const renderStats = (data) => {
+      const stats = getUnifiedStats(data);
       const items = [
-        ['Compliance Score', `${Math.round(data.complianceScore || 0)} / 100`],
-        ['Issues', data.totalIssues || 0],
-        ['Auto-fixable', data.autoFixable || 0],
-        ['Manual fixes', data.manualFixesRequired || 0]
+        ['Compliance Score', `${Math.round(stats.complianceScore)} / 100`],
+        ['Issues', stats.totalIssues],
+        ['Auto-fixable', stats.autoFixable],
+        ['Manual fixes', stats.manualFixesRequired]
       ];
       document.getElementById('stats').innerHTML = items.map(([k, v]) => `<div class="stat"><div class="muted">${k}</div><strong>${v}</strong></div>`).join('');
     };
@@ -221,8 +265,26 @@
           )
         : [];
 
-      const normalizedIssues = topLevelIssues.length ? topLevelIssues : pageLevelIssues;
-      return normalizedIssues.filter(issue => issue.description || issue.standard !== 'N/A');
+      const allIssues = [...topLevelIssues, ...pageLevelIssues];
+      const dedupedIssues = allIssues.filter((issue, index, issues) => {
+        const key = [
+          issue.standard,
+          issue.description,
+          issue.severity,
+          issue.remediation_complexity,
+          issue.pageNumber ?? ''
+        ].join('|');
+
+        return index === issues.findIndex(candidate => [
+          candidate.standard,
+          candidate.description,
+          candidate.severity,
+          candidate.remediation_complexity,
+          candidate.pageNumber ?? ''
+        ].join('|') === key);
+      });
+
+      return dedupedIssues.filter(issue => issue.description || issue.standard !== 'N/A');
     };
 
     const renderIssueList = (issues, options = {}) => {
@@ -247,7 +309,7 @@
 
     const renderIssues = (data) => {
       const issues = getUnifiedIssues(data);
-      document.getElementById('issues').innerHTML = renderIssueList(issues);
+      document.getElementById('issues').innerHTML = renderIssueList(issues, { showPageNumber: true });
     };
 
     const renderRecommendations = (data) => {
@@ -276,7 +338,10 @@
       wrap.classList.remove('hidden');
       const nav = document.getElementById('pageNav');
       const detail = document.getElementById('pageDetail');
-      nav.innerHTML = pages.map((p, i) => `<button class="secondary page-btn" data-index="${i}">Page ${p.pageNumber} · Score ${p.complianceScore}</button>`).join('');
+      nav.innerHTML = pages.map((p, i) => {
+        const pageIssues = unifiedIssues.filter(issue => issue.pageNumber === p.pageNumber);
+        return `<button class="secondary page-btn" data-index="${i}">Page ${p.pageNumber} · Score ${p.complianceScore} · Issues ${pageIssues.length}</button>`;
+      }).join('');
       const draw = (index) => {
         const page = pages[index];
         const pageIssues = unifiedIssues.filter(issue => issue.pageNumber === page.pageNumber);
@@ -293,8 +358,9 @@
     };
 
     const renderResult = (data) => {
+      const stats = getUnifiedStats(data);
       document.getElementById('docName').textContent = data.documentName || 'Analyzed document';
-      document.getElementById('complianceText').textContent = `${data.complianceLevel || 'unknown'} · WCAG ${data.wcagLevel || 'N/A'}`;
+      document.getElementById('complianceText').textContent = `${data.complianceLevel || 'unknown'} · WCAG ${data.wcagLevel || 'N/A'} · Score ${Math.round(stats.complianceScore)} / 100`;
       renderStats(data);
       renderPII(data);
       renderIssues(data);
