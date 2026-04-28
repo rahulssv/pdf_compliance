@@ -94,28 +94,46 @@ def _classify_issue_for_remediation(description: str) -> str:
 
 
 def _normalize_issue(issue: Dict[str, Any], default_location: str = "document") -> Dict[str, Any]:
-    description = issue.get("description", "Unknown issue")
-    severity = issue.get("severity") or _issue_severity(description)
-    remediation_type = _classify_issue_for_remediation(description)
+    description = " ".join(str(issue.get("description", "Unknown issue")).split())
+    severity = str(issue.get("severity") or _issue_severity(description)).lower()
+    remediation_type = issue.get("remediation_type") or _classify_issue_for_remediation(description)
     auto_fixable = remediation_type in remediation_engine.auto_fixable_issues
-    complexity = "easy" if auto_fixable else ("hard" if severity == "high" else "medium")
+
+    complexity_by_type = {
+        "missing_language": "easy",
+        "missing_title": "easy",
+        "missing_metadata": "easy",
+        "pdf_ua_flag": "easy",
+        "missing_alt_text": "hard",
+        "form_field_unlabeled": "medium",
+        "no_tag_tree": "hard",
+        "scanned_document": "hard",
+        "reading_order": "medium",
+        "color_contrast": "medium",
+        "unknown": "medium",
+    }
+
     page_number = issue.get("pageNumber") or issue.get("page")
     location = issue.get("location") or issue.get("scope") or default_location
 
     if page_number is not None and location == "document":
         location = f"page {page_number}"
 
+    standard = issue.get("standard") or issue.get("wcag_criterion") or "N/A"
+    complexity = issue.get("remediation_complexity") or complexity_by_type.get(remediation_type, "medium")
+
     return {
         "category": issue.get("category", "General"),
         "severity": severity,
-        "wcag_criterion": issue.get("standard", "N/A"),
-        "standard": issue.get("standard", "N/A"),
+        "wcag_criterion": standard,
+        "standard": standard,
         "description": description,
         "location": location,
         "impact": issue.get("impact", "Can reduce accessibility for assistive technology users."),
         "remediation_complexity": complexity,
         "estimated_time": issue.get("estimated_time", "5-20 minutes"),
         "auto_fixable": auto_fixable,
+        "remediation_type": remediation_type,
         "pageNumber": page_number,
     }
 
@@ -235,26 +253,53 @@ def _merge_analysis_issues(
             )
 
     merged = normalized_base + normalized_page
-    deduped = []
-    seen = set()
+    deduped = {}
 
     for issue in merged:
         key = (
             issue.get("standard"),
-            issue.get("description"),
-            issue.get("severity"),
             issue.get("location"),
-            issue.get("pageNumber"),
+            issue.get("description"),
         )
-        if key in seen:
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = issue
             continue
-        seen.add(key)
-        deduped.append(issue)
 
-    return deduped
+        severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+        complexity_rank = {"hard": 3, "medium": 2, "easy": 1}
+
+        deduped[key] = {
+            **existing,
+            **issue,
+            "severity": existing["severity"]
+            if severity_rank.get(existing["severity"], 0) >= severity_rank.get(issue["severity"], 0)
+            else issue["severity"],
+            "remediation_complexity": existing["remediation_complexity"]
+            if complexity_rank.get(existing["remediation_complexity"], 0) >= complexity_rank.get(issue["remediation_complexity"], 0)
+            else issue["remediation_complexity"],
+            "auto_fixable": existing.get("auto_fixable", False) or issue.get("auto_fixable", False),
+            "remediation_type": existing.get("remediation_type")
+            if existing.get("auto_fixable", False)
+            else issue.get("remediation_type", existing.get("remediation_type")),
+        }
+
+    return list(deduped.values())
 
 
-def _summarize_issue_counts(issues: List[Dict[str, Any]]) -> Dict[str, int]:
+def _calculate_compliance_score(issues: List[Dict[str, Any]]) -> int:
+    severity_penalties = {
+        "critical": 35,
+        "high": 20,
+        "medium": 10,
+        "low": 5,
+    }
+    penalty = sum(severity_penalties.get(issue.get("severity", "low"), 5) for issue in issues)
+    return max(0, 100 - penalty)
+
+
+def _summarize_issue_counts(issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    compliance_score = _calculate_compliance_score(issues)
     return {
         "totalIssues": len(issues),
         "criticalIssues": sum(1 for issue in issues if issue["severity"] == "critical"),
@@ -263,6 +308,9 @@ def _summarize_issue_counts(issues: List[Dict[str, Any]]) -> Dict[str, int]:
         "lowIssues": sum(1 for issue in issues if issue["severity"] == "low"),
         "autoFixable": sum(1 for issue in issues if issue.get("auto_fixable")),
         "manualFixesRequired": sum(1 for issue in issues if not issue.get("auto_fixable")),
+        "complianceScore": compliance_score,
+        "complianceLevel": "compliant" if compliance_score >= 90 else ("partially-compliant" if compliance_score >= 60 else "non-compliant"),
+        "wcagLevel": _wcag_level(compliance_score),
     }
 
 
@@ -299,7 +347,6 @@ def _analyze_document_from_buffer(
     issues = _merge_analysis_issues(base.get("issues", []), page_analyses)
     issue_counts = _summarize_issue_counts(issues)
 
-    compliance_score = max(0, 100 - base.get("nonCompliancePercent", 100))
     recommendations, recommendation_meta = _build_recommendations(
         issues,
         require_gemini=require_gemini_remediation,
@@ -308,9 +355,6 @@ def _analyze_document_from_buffer(
     result: Dict[str, Any] = {
         "documentName": filename,
         "analysisDate": datetime.now(timezone.utc).isoformat(),
-        "complianceScore": compliance_score,
-        "complianceLevel": base.get("complianceStatus", "non-compliant"),
-        "wcagLevel": _wcag_level(compliance_score),
         "issues": issues,
         "recommendations": recommendations,
         "remediationMetadata": recommendation_meta,

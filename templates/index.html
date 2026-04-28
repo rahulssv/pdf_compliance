@@ -190,37 +190,16 @@
 
     const getUnifiedStats = (data) => {
       const issues = getUnifiedIssues(data);
-      const totalIssues = issues.length;
-      const autoFixable = issues.filter(issue => ['low', 'medium'].includes(String(issue.remediation_complexity || '').toLowerCase())).length;
-      const manualFixesRequired = Math.max(totalIssues - autoFixable, 0);
-
-      const totalPenalty = issues.reduce((sum, issue) => {
-        const severity = String(issue.severity || 'low').toLowerCase();
-        return sum + (severityWeights[severity] || severityWeights.low);
-      }, 0);
-
-      const derivedComplianceScore = totalIssues ? Math.max(0, 100 - totalPenalty) : 100;
-      const pageScores = Array.isArray(data.pageAnalyses)
-        ? data.pageAnalyses
-            .map(page => Number(page.complianceScore))
-            .filter(score => Number.isFinite(score))
-        : [];
-      const averagePageScore = pageScores.length
-        ? pageScores.reduce((sum, score) => sum + score, 0) / pageScores.length
-        : null;
       const backendComplianceScore = Number(data.complianceScore);
-
-      const complianceScore = [
-        derivedComplianceScore,
-        averagePageScore,
-        Number.isFinite(backendComplianceScore) ? backendComplianceScore : null
-      ].find(score => Number.isFinite(score) && (totalIssues === 0 || score < 100)) ?? derivedComplianceScore;
+      const backendTotalIssues = Number(data.totalIssues);
+      const backendAutoFixable = Number(data.autoFixable);
+      const backendManualFixes = Number(data.manualFixesRequired);
 
       return {
-        complianceScore,
-        totalIssues,
-        autoFixable,
-        manualFixesRequired
+        complianceScore: Number.isFinite(backendComplianceScore) ? backendComplianceScore : 100,
+        totalIssues: Number.isFinite(backendTotalIssues) ? backendTotalIssues : issues.length,
+        autoFixable: Number.isFinite(backendAutoFixable) ? backendAutoFixable : issues.filter(issue => issue.auto_fixable).length,
+        manualFixesRequired: Number.isFinite(backendManualFixes) ? backendManualFixes : issues.filter(issue => !issue.auto_fixable).length
       };
     };
 
@@ -251,9 +230,10 @@
     const normalizeIssue = (issue = {}, pageNumber = null) => ({
       ...issue,
       severity: issue.severity || 'low',
-      standard: issue.standard || 'N/A',
-      description: issue.description || '',
+      standard: issue.standard || issue.wcag_criterion || 'N/A',
+      description: (issue.description || '').trim(),
       remediation_complexity: issue.remediation_complexity || 'medium',
+      auto_fixable: Boolean(issue.auto_fixable),
       pageNumber: issue.pageNumber ?? issue.page ?? pageNumber
     });
 
@@ -266,25 +246,17 @@
         : [];
 
       const allIssues = [...topLevelIssues, ...pageLevelIssues];
-      const dedupedIssues = allIssues.filter((issue, index, issues) => {
-        const key = [
-          issue.standard,
-          issue.description,
-          issue.severity,
-          issue.remediation_complexity,
-          issue.pageNumber ?? ''
-        ].join('|');
+      const dedupedIssues = Array.from(new Map(
+        allIssues
+          .filter(issue => issue.description || issue.standard !== 'N/A')
+          .map(issue => [[
+            issue.standard,
+            issue.pageNumber ?? '',
+            issue.description
+          ].join('|'), issue])
+      ).values());
 
-        return index === issues.findIndex(candidate => [
-          candidate.standard,
-          candidate.description,
-          candidate.severity,
-          candidate.remediation_complexity,
-          candidate.pageNumber ?? ''
-        ].join('|') === key);
-      });
-
-      return dedupedIssues.filter(issue => issue.description || issue.standard !== 'N/A');
+      return dedupedIssues;
     };
 
     const renderIssueList = (issues, options = {}) => {
