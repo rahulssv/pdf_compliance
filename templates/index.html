@@ -204,19 +204,50 @@
       `;
     };
 
-    const renderIssues = (data) => {
-      const issues = data.issues || [];
-      if (!issues.length) {
-        document.getElementById('issues').innerHTML = '<p class="muted">No issues found.</p>';
-        return;
+    const normalizeIssue = (issue = {}, pageNumber = null) => ({
+      ...issue,
+      severity: issue.severity || 'low',
+      standard: issue.standard || 'N/A',
+      description: issue.description || '',
+      remediation_complexity: issue.remediation_complexity || 'medium',
+      pageNumber: issue.pageNumber ?? issue.page ?? pageNumber
+    });
+
+    const getUnifiedIssues = (data) => {
+      const topLevelIssues = Array.isArray(data.issues) ? data.issues.map(issue => normalizeIssue(issue)) : [];
+      const pageLevelIssues = Array.isArray(data.pageAnalyses)
+        ? data.pageAnalyses.flatMap(page =>
+            (Array.isArray(page.issues) ? page.issues : []).map(issue => normalizeIssue(issue, page.pageNumber))
+          )
+        : [];
+
+      const normalizedIssues = topLevelIssues.length ? topLevelIssues : pageLevelIssues;
+      return normalizedIssues.filter(issue => issue.description || issue.standard !== 'N/A');
+    };
+
+    const renderIssueList = (issues, options = {}) => {
+      const { showPageNumber = false, limit = null, emptyMessage = 'No issues found.' } = options;
+      const visibleIssues = typeof limit === 'number' ? issues.slice(0, limit) : issues;
+
+      if (!visibleIssues.length) {
+        return `<p class="muted">${emptyMessage}</p>`;
       }
-      document.getElementById('issues').innerHTML = issues.map(issue => `
-        <div class="issue ${issue.severity || 'low'}">
-          <strong>${issue.standard || 'N/A'}</strong>
-          <div>${issue.description || ''}</div>
-          <div class="muted">Severity: ${issue.severity || 'low'} · Complexity: ${issue.remediation_complexity || 'medium'}</div>
+
+      return visibleIssues.map(issue => `
+        <div class="issue ${issue.severity}">
+          <strong>${issue.standard}</strong>
+          <div>${issue.description}</div>
+          <div class="muted">
+            Severity: ${issue.severity} · Complexity: ${issue.remediation_complexity}
+            ${showPageNumber && issue.pageNumber != null ? ` · Page ${issue.pageNumber}` : ''}
+          </div>
         </div>
       `).join('');
+    };
+
+    const renderIssues = (data) => {
+      const issues = getUnifiedIssues(data);
+      document.getElementById('issues').innerHTML = renderIssueList(issues);
     };
 
     const renderRecommendations = (data) => {
@@ -236,6 +267,7 @@
 
     const renderPages = (data) => {
       const pages = data.pageAnalyses || [];
+      const unifiedIssues = getUnifiedIssues(data);
       const wrap = document.getElementById('pagesWrap');
       if (!pages.length) {
         wrap.classList.add('hidden');
@@ -247,10 +279,11 @@
       nav.innerHTML = pages.map((p, i) => `<button class="secondary page-btn" data-index="${i}">Page ${p.pageNumber} · Score ${p.complianceScore}</button>`).join('');
       const draw = (index) => {
         const page = pages[index];
+        const pageIssues = unifiedIssues.filter(issue => issue.pageNumber === page.pageNumber);
         detail.innerHTML = `
           <h4>Page ${page.pageNumber}</h4>
-          <p class="muted">Issues: ${page.issueCount} · PII: ${page.piiDetected ? 'Yes' : 'No'}</p>
-          ${(page.issues || []).slice(0, 6).map(issue => `<div class="issue ${issue.severity || 'low'}">${issue.description}</div>`).join('') || '<p class="muted">No page issues.</p>'}
+          <p class="muted">Issues: ${pageIssues.length} · PII: ${page.piiDetected ? 'Yes' : 'No'}</p>
+          ${renderIssueList(pageIssues, { emptyMessage: 'No page issues.' })}
         `;
       };
       draw(0);
