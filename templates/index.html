@@ -25,7 +25,24 @@
     .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
     .stat { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #334155; margin: 2px; font-size: .75rem; }
-    .issue { border-left: 4px solid #f59e0b; padding: 8px 10px; margin: 8px 0; background: #0f172a; border-radius: 6px; }
+    .issue { border-left: 4px solid #f59e0b; padding: 8px 10px; margin: 8px 0; background: #0f172a; border-radius: 6px; font-size: 1rem; line-height: 1.5; }
+    .issue strong { display: block; font-size: 1rem; font-weight: 600; line-height: 1.5; }
+    .issue div,
+    .issue p,
+    .issue span,
+    .issue li,
+    .issue code,
+    .issue pre,
+    .issue em,
+    .issue b,
+    .issue i,
+    .issue small,
+    .issue .muted { font-size: 1rem !important; line-height: 1.5; color: inherit; }
+    .issue .muted { color: #94a3b8 !important; }
+    .issue ul,
+    .issue ol { margin: 6px 0 6px 20px; padding: 0; }
+    .issue pre,
+    .issue code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
     .issue.high, .issue.critical { border-left-color: #ef4444; }
     .issue.medium { border-left-color: #f59e0b; }
     .issue.low { border-left-color: #22c55e; }
@@ -293,7 +310,7 @@
       document.getElementById('recommendations').innerHTML = recs.map(rec => `
         <div class="issue ${rec.priority || 'medium'}">
           <strong>${rec.priority || 'medium'} priority</strong>
-          <div>${rec.action || ''}</div>
+          <div>${String(rec.action || '').replace(/style\s*=\s*"[^"]*"/gi, '').replace(/style\s*=\s*'[^']*'/gi, '')}</div>
           <div class="muted">${rec.benefit || ''}</div>
         </div>
       `).join('');
