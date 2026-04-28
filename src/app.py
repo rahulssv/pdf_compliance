@@ -8,10 +8,12 @@ from src.config import Config
 from src.routes.health import health_bp
 from src.routes.api_v1 import api_v1_bp
 from src.routes.api_v2 import api_v2_bp
+from src.middleware import APILogger
 
-# Configure logging
+# Configure logging based on environment
+log_level = logging.DEBUG if Config.ENABLE_VERBOSE_LOGGING else logging.INFO
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -33,6 +35,13 @@ def create_app():
     # Enable CORS
     CORS(app)
     logger.info("✅ CORS enabled")
+    
+    # Initialize API Logger middleware (always enabled by default)
+    api_logger = APILogger(app)
+    if Config.ENABLE_API_LOGGING:
+        logger.info(f"✅ API Logger middleware enabled (verbose={Config.ENABLE_VERBOSE_LOGGING})")
+    else:
+        logger.info("ℹ️ API Logger middleware initialized but logging disabled")
     
     # Register blueprints
     app.register_blueprint(health_bp)

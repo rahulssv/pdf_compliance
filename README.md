@@ -101,9 +101,34 @@ curl -X POST http://localhost:8000/api/v2/remediate/auto/download \
 pytest -q
 ```
 
+## API Monitoring & Logging
+
+Monitor all API calls (incoming requests and outgoing Gemini API calls) with comprehensive logging:
+
+```bash
+# Quick start - enable logging
+./scripts/enable_api_logging.sh
+
+# View logs in real-time
+docker-compose logs -f pdf-compliance-api | grep -E "INCOMING|OUTGOING|GEMINI"
+```
+
+**Documentation:**
+- 📖 [Quick Start Guide](docs/API_LOGGING_QUICK_START.md) - Get started in 3 steps
+- 📚 [Complete Monitoring Guide](docs/API_MONITORING_GUIDE.md) - Full documentation
+
+**What gets logged:**
+- ✅ All HTTP requests (method, URL, headers, body)
+- ✅ All HTTP responses (status, timing, body)
+- ✅ Gemini API calls (model, prompts, responses)
+- ✅ Errors with stack traces
+- ✅ Request correlation via unique IDs
+
 ## Documentation
 
 - [`docs/API_V2_SPECIFICATION.md`](docs/API_V2_SPECIFICATION.md)
 - [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md)
 - [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md)
+- [`docs/API_LOGGING_QUICK_START.md`](docs/API_LOGGING_QUICK_START.md) - **NEW: API Monitoring Quick Start**
+- [`docs/API_MONITORING_GUIDE.md`](docs/API_MONITORING_GUIDE.md) - **NEW: Complete Monitoring Guide**
 - [`docs/pdf-accessibility-compliance-api-contract.md`](docs/pdf-accessibility-compliance-api-contract.md) (legacy v1 contract reference)

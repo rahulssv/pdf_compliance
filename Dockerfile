@@ -18,5 +18,5 @@ COPY templates/ ./templates/
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "120", "--workers", "2", "src.app:app"]
+# Run the application with logging
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "120", "--workers", "2", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info", "src.app:app"]

@@ -16,6 +16,10 @@ class Config:
     FLASK_ENV = os.getenv('FLASK_ENV', 'production')
     DEBUG = FLASK_ENV == 'development'
     
+    # Logging Configuration
+    ENABLE_API_LOGGING = os.getenv('ENABLE_API_LOGGING', 'true').lower() == 'true'
+    ENABLE_VERBOSE_LOGGING = os.getenv('ENABLE_VERBOSE_LOGGING', 'false').lower() == 'true'
+    
     # API Configuration
     API_VERSION = 'v1'
     API_PREFIX = f'/api/{API_VERSION}'

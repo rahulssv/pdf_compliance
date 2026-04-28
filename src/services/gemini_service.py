@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import google.generativeai as genai
@@ -231,12 +232,46 @@ class GeminiService:
             model = self._get_or_create_model(candidate)
             for attempt in range(max_retries):
                 try:
-                    logger.info(
-                        f"🤖 Gemini call using model {candidate} "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
+                    # Log detailed API call information
+                    call_start = time.time()
+                    api_call_details = {
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "service": "Gemini API",
+                        "model": candidate,
+                        "attempt": f"{attempt + 1}/{max_retries}",
+                        "prompt_length": len(prompt),
+                        "prompt_preview": prompt[:200] + "..." if len(prompt) > 200 else prompt,
+                        "temperature": Config.GEMINI_TEMPERATURE,
+                        "max_tokens": Config.GEMINI_MAX_TOKENS,
+                    }
+                    
+                    if Config.ENABLE_VERBOSE_LOGGING:
+                        logger.debug(f"🌐 GEMINI API CALL: {json.dumps(api_call_details, indent=2)}")
+                    else:
+                        logger.info(
+                            f"🤖 Gemini call using model {candidate} "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                    
                     response = model.generate_content(prompt)
+                    call_duration = time.time() - call_start
+                    
                     response_text = self._extract_response_text(response)
+                    
+                    # Log response details
+                    response_details = {
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "service": "Gemini API",
+                        "model": candidate,
+                        "duration_ms": round(call_duration * 1000, 2),
+                        "response_length": len(response_text) if response_text else 0,
+                        "response_preview": (response_text[:200] + "...") if response_text and len(response_text) > 200 else response_text,
+                        "success": True,
+                    }
+                    
+                    if Config.ENABLE_VERBOSE_LOGGING:
+                        logger.debug(f"✅ GEMINI API RESPONSE: {json.dumps(response_details, indent=2)}")
+                    
                     if response_text and len(response_text.strip()) > 20:
                         self.is_initialized = True
                         return response_text.strip(), candidate
