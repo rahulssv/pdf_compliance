@@ -254,6 +254,18 @@ def _merge_analysis_issues(
     return deduped
 
 
+def _summarize_issue_counts(issues: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "totalIssues": len(issues),
+        "criticalIssues": sum(1 for issue in issues if issue["severity"] == "critical"),
+        "highIssues": sum(1 for issue in issues if issue["severity"] == "high"),
+        "mediumIssues": sum(1 for issue in issues if issue["severity"] == "medium"),
+        "lowIssues": sum(1 for issue in issues if issue["severity"] == "low"),
+        "autoFixable": sum(1 for issue in issues if issue.get("auto_fixable")),
+        "manualFixesRequired": sum(1 for issue in issues if not issue.get("auto_fixable")),
+    }
+
+
 def _analyze_document_from_buffer(
     file_buffer: BytesIO,
     filename: str,
@@ -285,6 +297,7 @@ def _analyze_document_from_buffer(
         page_analyses = page_result.get("pageAnalysis", [])
 
     issues = _merge_analysis_issues(base.get("issues", []), page_analyses)
+    issue_counts = _summarize_issue_counts(issues)
 
     compliance_score = max(0, 100 - base.get("nonCompliancePercent", 100))
     recommendations, recommendation_meta = _build_recommendations(
@@ -298,15 +311,11 @@ def _analyze_document_from_buffer(
         "complianceScore": compliance_score,
         "complianceLevel": base.get("complianceStatus", "non-compliant"),
         "wcagLevel": _wcag_level(compliance_score),
-        "totalIssues": len(issues),
-        "criticalIssues": sum(1 for issue in issues if issue["severity"] == "critical"),
-        "highIssues": sum(1 for issue in issues if issue["severity"] == "high"),
-        "mediumIssues": sum(1 for issue in issues if issue["severity"] == "medium"),
-        "lowIssues": sum(1 for issue in issues if issue["severity"] == "low"),
         "issues": issues,
         "recommendations": recommendations,
         "remediationMetadata": recommendation_meta,
         "memoryUsage": ephemeral_handler.get_memory_usage(),
+        **issue_counts,
     }
 
     if detect_pii:
@@ -344,12 +353,12 @@ def _analyze_document_from_buffer(
         result["autoRemediatedPdfAvailable"] = True
         result["autoRemediatedPdfDownloadEndpoint"] = "/api/v2/remediate/auto/download"
         summary = remediation.get("summary", {})
-        result["autoFixable"] = summary.get("autoFixed", 0)
-        result["manualFixesRequired"] = summary.get("manualRequired", 0)
+        result["autoFixable"] = summary.get("remainingAutoFixable", result["autoFixable"])
+        result["manualFixesRequired"] = summary.get("manualRequired", result["manualFixesRequired"])
+        result["fixedIssues"] = remediation.get("fixedIssues", [])
+        result["remainingIssues"] = remediation.get("remainingIssues", issues)
     else:
         result["autoRemediatedPdfAvailable"] = False
-        result["autoFixable"] = sum(1 for issue in issues if issue.get("auto_fixable"))
-        result["manualFixesRequired"] = sum(1 for issue in issues if not issue.get("auto_fixable"))
 
     if validate_ai:
         result["validationMetrics"] = _build_validation_metrics(recommendations, issues)
@@ -681,8 +690,12 @@ def auto_remediate():
 
         with ephemeral_handler.ephemeral_file_context(data["fileUrl"]) as (file_buffer, filename):
             if incoming_issues is None:
-                analyzed = pdf_analyzer.analyze_pdf_buffer(file_buffer, filename)
-                issues = [_normalize_issue(issue) for issue in analyzed.get("issues", [])]
+                analyzed = _analyze_document_from_buffer(
+                    file_buffer=file_buffer,
+                    filename=filename,
+                    options={"pageLevel": True, "detectPII": True, "autoRemediate": False, "validateAI": False},
+                )
+                issues = analyzed.get("issues", [])
             else:
                 issues = [_normalize_issue(issue) for issue in incoming_issues]
 
