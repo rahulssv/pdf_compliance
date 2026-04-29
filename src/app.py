@@ -8,6 +8,7 @@ from src.config import Config
 from src.routes.health import health_bp
 from src.routes.api_v1 import api_v1_bp
 from src.routes.api_v2 import api_v2_bp
+from src.routes.swagger import swagger_bp
 from src.middleware import APILogger
 
 # Configure logging based on environment
@@ -47,7 +48,9 @@ def create_app():
     app.register_blueprint(health_bp)
     app.register_blueprint(api_v1_bp, url_prefix=Config.API_PREFIX)
     app.register_blueprint(api_v2_bp, url_prefix=Config.API_V2_PREFIX)
+    app.register_blueprint(swagger_bp, url_prefix='/api/docs')
     logger.info(f"✅ Blueprints registered (API prefix: {Config.API_PREFIX})")
+    logger.info("✅ Swagger UI available at /api/docs")
 
     @app.route("/", methods=["GET"])
     def index():

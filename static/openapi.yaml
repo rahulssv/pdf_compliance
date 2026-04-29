@@ -1,0 +1,504 @@
+openapi: 3.0.0
+info:
+  title: PDF Accessibility Compliance API
+  description: Comprehensive API for PDF accessibility analysis and remediation
+  version: 2.0.0
+  contact:
+    name: API Support
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: API v1
+    description: Legacy API endpoints
+  - name: API v2 - Analysis
+    description: Document analysis endpoints
+  - name: API v2 - PII
+    description: PII detection endpoints
+  - name: API v2 - Pages
+    description: Page-level operations
+  - name: API v2 - Remediation
+    description: Auto-remediation endpoints
+  - name: API v2 - Reports
+    description: Report generation
+  - name: API v2 - Validation
+    description: AI validation endpoints
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+
+  /api/v1/scan:
+    post:
+      tags:
+        - API v1
+      summary: Scan PDF files for accessibility issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrls
+              properties:
+                fileUrls:
+                  type: array
+                  items:
+                    type: string
+                  example: ["docs/fixtures/accessible_guide.pdf"]
+      responses:
+        '200':
+          description: Scan completed successfully
+        '400':
+          description: Invalid request
+        '500':
+          description: Server error
+
+  /api/v1/remediate:
+    post:
+      tags:
+        - API v1
+      summary: Provide remediation guidance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrls
+              properties:
+                fileUrls:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Remediation guidance provided
+
+  /api/v1/dashboard:
+    post:
+      tags:
+        - API v1
+      summary: Generate compliance dashboard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrls
+              properties:
+                fileUrls:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Dashboard generated
+
+  /api/v2/analyze:
+    post:
+      tags:
+        - API v2 - Analysis
+      summary: Analyze PDF document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+              properties:
+                fileUrl:
+                  type: string
+                  example: "docs/fixtures/accessible_guide.pdf"
+                options:
+                  type: object
+                  properties:
+                    detectPII:
+                      type: boolean
+                      default: false
+                    piiSensitivity:
+                      type: string
+                      enum: [low, medium, high]
+                      default: medium
+                    pageLevel:
+                      type: boolean
+                      default: false
+                    autoRemediate:
+                      type: boolean
+                      default: false
+                    validateAI:
+                      type: boolean
+                      default: true
+                    requireGeminiRemediation:
+                      type: boolean
+                      default: false
+      responses:
+        '200':
+          description: Analysis completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  complianceScore:
+                    type: number
+                  issues:
+                    type: array
+                  recommendations:
+                    type: array
+
+  /api/v2/analyze/upload:
+    post:
+      tags:
+        - API v2 - Analysis
+      summary: Analyze uploaded PDF
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                options:
+                  type: string
+                  description: JSON string of options
+      responses:
+        '200':
+          description: Analysis completed
+
+  /api/v2/analyze/batch:
+    post:
+      tags:
+        - API v2 - Analysis
+      summary: Batch analyze multiple PDFs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrls
+              properties:
+                fileUrls:
+                  type: array
+                  items:
+                    type: string
+                options:
+                  type: object
+      responses:
+        '200':
+          description: Batch analysis completed
+
+  /api/v2/pii/detect:
+    post:
+      tags:
+        - API v2 - PII
+      summary: Detect PII in document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+              properties:
+                fileUrl:
+                  type: string
+                sensitivity:
+                  type: string
+                  enum: [low, medium, high]
+                redact:
+                  type: boolean
+      responses:
+        '200':
+          description: PII detection completed
+
+  /api/v2/pages/analyze:
+    post:
+      tags:
+        - API v2 - Pages
+      summary: Analyze specific pages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+              properties:
+                fileUrl:
+                  type: string
+                pageRange:
+                  type: object
+                  properties:
+                    start:
+                      type: integer
+                    end:
+                      type: integer
+      responses:
+        '200':
+          description: Page analysis completed
+
+  /api/v2/scan/page/{page_number}:
+    post:
+      tags:
+        - API v2 - Pages
+      summary: Scan single page
+      parameters:
+        - name: page_number
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+              properties:
+                fileUrl:
+                  type: string
+      responses:
+        '200':
+          description: Page scanned
+
+  /api/v2/pages/extract:
+    post:
+      tags:
+        - API v2 - Pages
+      summary: Extract page content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+                - pageNumber
+              properties:
+                fileUrl:
+                  type: string
+                pageNumber:
+                  type: integer
+                format:
+                  type: string
+                  enum: [text, json, pdf]
+      responses:
+        '200':
+          description: Page extracted
+
+  /api/v2/pages/summary:
+    post:
+      tags:
+        - API v2 - Pages
+      summary: Get pages summary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+              properties:
+                fileUrl:
+                  type: string
+                pageRange:
+                  type: object
+      responses:
+        '200':
+          description: Summary generated
+
+  /api/v2/remediate/auto:
+    post:
+      tags:
+        - API v2 - Remediation
+      summary: Auto-remediate issues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - fileUrl
+              properties:
+                fileUrl:
+                  type: string
+                issues:
+                  type: array
+                includeAIGuidance:
+                  type: boolean
+                requireGemini:
+                  type: boolean
+      responses:
+        '200':
+          description: Remediation completed
+
+  /api/v2/remediate/auto/download:
+    post:
+      tags:
+        - API v2 - Remediation
+      summary: Download remediated PDF
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                issues:
+                  type: string
+      responses:
+        '200':
+          description: PDF downloaded
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /api/v2/remediate/guidance:
+    post:
+      tags:
+        - API v2 - Remediation
+      summary: Get remediation guidance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - issueType
+              properties:
+                issueType:
+                  type: string
+                issueDescription:
+                  type: string
+                standard:
+                  type: string
+                requireGemini:
+                  type: boolean
+      responses:
+        '200':
+          description: Guidance provided
+
+  /api/v2/reports/generate:
+    post:
+      tags:
+        - API v2 - Reports
+      summary: Generate compliance report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - analysisData
+              properties:
+                analysisData:
+                  type: object
+                format:
+                  type: string
+                  enum: [json, pdf, html, csv, markdown]
+                sections:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Report generated
+
+  /api/v2/validation/check:
+    post:
+      tags:
+        - API v2 - Validation
+      summary: Validate AI output
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                aiOutput:
+                  type: object
+                analysisResult:
+                  type: object
+                context:
+                  type: object
+                fallbackResponse:
+                  type: object
+      responses:
+        '200':
+          description: Validation completed
+
+  /api/v2/prompts/performance:
+    get:
+      tags:
+        - API v2 - Validation
+      summary: Get prompt performance metrics
+      parameters:
+        - name: promptName
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Performance metrics retrieved
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+
+# Made with Bob
