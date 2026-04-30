@@ -99,4 +99,3 @@ echo "  1. Check logs: docker-compose logs -f"
 echo "  2. Verify imports: grep -n swagger src/app.py"
 echo "  3. Test static files: curl http://localhost:8000/static/openapi.yaml"
 
-# Made with Bob
